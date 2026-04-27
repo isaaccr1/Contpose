@@ -10,7 +10,7 @@ export default function Header() {
 
   return (
     <View style={styles.headerContainer}>
-      <Text style={styles.headerTitle}>Taskit</Text>
+      <Text style={styles.headerTitle}>ContPose</Text>
       <View style={styles.headerIcons}>
         <IconSymbol name="magnifyingglass" color="#2b2c2d" size={18} />
         <IconSymbol name="bell" color="#2b2c2d" size={18} />
