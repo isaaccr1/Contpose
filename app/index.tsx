@@ -97,6 +97,16 @@ export default function Home() {
     setModalTitle(title);
   };
 
+  const handleNavPress = (item: typeof navItems[number]) => {
+    if (item.key === 'profile') {
+      router.push('/profile');
+      setActiveTab(item.key);
+      return;
+    }
+
+    openBlank(item.label, item.key);
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace('/signin');
@@ -171,7 +181,7 @@ export default function Home() {
           <TouchableOpacity
             key={item.key}
             style={styles.navItem}
-            onPress={() => openBlank(item.label, item.key)}
+            onPress={() => handleNavPress(item)}
           >
             <Ionicons
               name={item.icon as any}

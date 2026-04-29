@@ -42,6 +42,12 @@ function InitialLayout() {
             gestureEnabled: false,
           }}
         />
+        <Stack.Screen
+          name="profile"
+          options={{
+            headerShown: false,
+          }}
+        />
         <Stack.Screen name="+not-found" />
       </Stack>
 
