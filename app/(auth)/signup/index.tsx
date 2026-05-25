@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { Link } from 'expo-router';
 import { z } from 'zod';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, Modal, ScrollView, Image, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, Modal, ScrollView, Image, Alert, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -43,6 +43,17 @@ export default function SignUp() {
   const [pickerTarget, setPickerTarget] = useState<'weight' | 'height' | 'age' | null>(null);
   const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
 
+  const mapSupabaseError = (error: unknown, fallback: string) => {
+    const message = (error as { message?: string })?.message?.trim();
+    if (!message) return fallback;
+
+    if (message.toLowerCase().includes('row-level security policy')) {
+      return 'No hay permisos para subir la foto de perfil. Configura las politicas RLS del bucket avatars en Supabase.';
+    }
+
+    return message;
+  };
+
   const { control, handleSubmit, formState: { errors }, setValue, watch } = useForm<SignUpForm>({
     resolver: zodResolver(signUpSchema)
   });
@@ -74,13 +85,24 @@ export default function SignUp() {
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    const { status, canAskAgain } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu camara para tomar una foto.');
+      Alert.alert(
+        'Permiso requerido',
+        'Necesitamos acceso a tu camara para tomar una foto.',
+        canAskAgain
+          ? [{ text: 'OK' }]
+          : [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Abrir ajustes', onPress: () => Linking.openSettings() },
+          ],
+      );
       return;
     }
 
     const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      cameraType: ImagePicker.CameraType.front,
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
@@ -94,8 +116,8 @@ export default function SignUp() {
   const handlePickProfileImage = () => {
     Alert.alert('Foto de perfil', 'Selecciona una opcion', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Camara', onPress: takePhoto },
-      { text: 'Galeria', onPress: pickFromLibrary },
+      { text: 'Camara', onPress: () => { void takePhoto(); } },
+      { text: 'Galeria', onPress: () => { void pickFromLibrary(); } },
     ]);
   };
 
@@ -174,7 +196,7 @@ export default function SignUp() {
 
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ha ocurrido un error');
+      setError(mapSupabaseError(err, 'Ha ocurrido un error'));
     } finally {
       setLoading(false);
     }
