@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Image, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, Image, Modal, Platform, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from '@expo/vector-icons';
 import { router } from "expo-router";
 
@@ -22,6 +22,7 @@ export default function Home() {
   const { session, loading } = useAuth();
   const [modalTitle, setModalTitle] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('home');
+  const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
   const topBarY = useRef(new Animated.Value(-40)).current;
   const contentOpacity = useRef(new Animated.Value(0)).current;
@@ -114,7 +115,7 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <Animated.View style={[styles.topBar, { transform: [{ translateY: topBarY }] }] }>
+      <Animated.View style={[styles.topBar, { paddingTop: 14 + androidTopInset, transform: [{ translateY: topBarY }] }] }>
         <View style={styles.brandRow}>
           <View style={styles.topLogoWrapper}>
             <Image source={require('../assets/images/Logo.png')} style={[styles.topLogo, getLogoSize(140)]} resizeMode="contain" />

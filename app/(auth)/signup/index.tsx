@@ -2,8 +2,11 @@ import { useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { Link } from 'expo-router';
 import { z } from 'zod';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, Modal, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, Modal, ScrollView, Image, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import { decode } from 'base64-arraybuffer';
 
 import { Logo } from '@/components/Logo';
 import { supabase } from '@/lib/supabase';
@@ -38,6 +41,7 @@ export default function SignUp() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<'weight' | 'height' | 'age' | null>(null);
+  const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
 
   const { control, handleSubmit, formState: { errors }, setValue, watch } = useForm<SignUpForm>({
     resolver: zodResolver(signUpSchema)
@@ -49,6 +53,77 @@ export default function SignUp() {
   const weightOptions = Array.from({ length: 171 }, (_, i) => 30 + i);
   const heightOptions = Array.from({ length: 101 }, (_, i) => 120 + i);
   const ageOptions = Array.from({ length: 88 }, (_, i) => 13 + i);
+
+  const pickFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galeria para seleccionar una foto.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setProfileImageUri(result.assets[0].uri);
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu camara para tomar una foto.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setProfileImageUri(result.assets[0].uri);
+    }
+  };
+
+  const handlePickProfileImage = () => {
+    Alert.alert('Foto de perfil', 'Selecciona una opcion', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Camara', onPress: takePhoto },
+      { text: 'Galeria', onPress: pickFromLibrary },
+    ]);
+  };
+
+  const uploadAvatar = async (userId: string, uri: string) => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const arrayBuffer = decode(base64);
+    const fileExt = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
+    const filePath = `${userId}/avatar.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, arrayBuffer, {
+        upsert: true,
+        contentType: `image/${fileExt === 'jpg' ? 'jpeg' : fileExt}`,
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+    return {
+      avatarPath: filePath,
+      avatarUrl: `${data.publicUrl}?t=${Date.now()}`,
+    };
+  };
 
   const onSubmit = async (data: SignUpForm) => {
 
@@ -73,13 +148,28 @@ export default function SignUp() {
         throw signupError;
       }
 
-      const { error: loginError } = await supabase.auth.signInWithPassword({
+      const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
         email: data.email,
         password: data.password
       });
 
       if (loginError) {
         throw loginError;
+      }
+
+      if (profileImageUri && loginData.user) {
+        const avatar = await uploadAvatar(loginData.user.id, profileImageUri);
+        const { error: updateUserError } = await supabase.auth.updateUser({
+          data: {
+            ...loginData.user.user_metadata,
+            avatar_url: avatar.avatarUrl,
+            avatar_path: avatar.avatarPath,
+          },
+        });
+
+        if (updateUserError) {
+          throw updateUserError;
+        }
       }
 
 
@@ -95,6 +185,16 @@ export default function SignUp() {
       <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Logo />
+            <TouchableOpacity style={styles.avatarButton} onPress={handlePickProfileImage} activeOpacity={0.85}>
+              {profileImageUri ? (
+                <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Ionicons name="person" size={28} color="#64748b" />
+                </View>
+              )}
+              <Text style={styles.avatarButtonText}>Agregar foto de perfil</Text>
+            </TouchableOpacity>
             <Text style={styles.pageTitle}>Crear cuenta</Text>
             <Text style={styles.subtitle}>
               Registra tu usuario para comenzar con ContPose
@@ -493,6 +593,34 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  avatarButton: {
+    alignItems: 'center',
+    marginTop: -8,
+    marginBottom: 10,
+    gap: 8,
+  },
+  avatarPlaceholder: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+  avatarImage: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 2,
+    borderColor: '#2563eb',
+  },
+  avatarButtonText: {
+    fontSize: 13,
+    color: '#2563eb',
+    fontFamily: 'RobotoBold',
   },
   form: {
     width: '100%',

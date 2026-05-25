@@ -1,6 +1,9 @@
 import { useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
+import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, Modal, StyleSheet, Image, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import { decode } from 'base64-arraybuffer';
 import { useAuth } from '@/providers/AuthProvider';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
@@ -35,6 +38,108 @@ export default function Profile() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [avatarUpdating, setAvatarUpdating] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.user.user_metadata?.avatar_url ?? null);
+
+  const uploadAvatar = async (userId: string, uri: string) => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const arrayBuffer = decode(base64);
+    const fileExt = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
+    const filePath = `${userId}/avatar.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, arrayBuffer, {
+        upsert: true,
+        contentType: `image/${fileExt === 'jpg' ? 'jpeg' : fileExt}`,
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+    return {
+      avatarPath: filePath,
+      avatarUrl: `${data.publicUrl}?t=${Date.now()}`,
+    };
+  };
+
+  const pickFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galeria para seleccionar una foto.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      await updateAvatar(result.assets[0].uri);
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu camara para tomar una foto.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      await updateAvatar(result.assets[0].uri);
+    }
+  };
+
+  const openAvatarOptions = () => {
+    Alert.alert('Foto de perfil', 'Selecciona una opcion', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Camara', onPress: takePhoto },
+      { text: 'Galeria', onPress: pickFromLibrary },
+    ]);
+  };
+
+  const updateAvatar = async (uri: string) => {
+    if (!session) return;
+
+    try {
+      setAvatarUpdating(true);
+      setAvatarError(null);
+
+      const avatar = await uploadAvatar(session.user.id, uri);
+      const { error: updateUserError } = await supabase.auth.updateUser({
+        data: {
+          ...session.user.user_metadata,
+          avatar_url: avatar.avatarUrl,
+          avatar_path: avatar.avatarPath,
+        },
+      });
+
+      if (updateUserError) {
+        throw updateUserError;
+      }
+
+      setAvatarUrl(avatar.avatarUrl);
+    } catch (error) {
+      setAvatarError((error as { message?: string })?.message ?? 'No se pudo actualizar la foto de perfil.');
+    } finally {
+      setAvatarUpdating(false);
+    }
+  };
 
   const handleDeleteAccount = async () => {
     if (!session) return;
@@ -94,6 +199,19 @@ export default function Profile() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Información personal</Text>
+          <View style={styles.avatarSection}>
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Ionicons name="person" size={34} color="#64748b" />
+              </View>
+            )}
+            <TouchableOpacity style={styles.avatarActionButton} onPress={openAvatarOptions} disabled={avatarUpdating}>
+              <Text style={styles.avatarActionButtonText}>{avatarUpdating ? 'Actualizando...' : 'Cambiar foto'}</Text>
+            </TouchableOpacity>
+          </View>
+          {avatarError ? <Text style={styles.errorText}>{avatarError}</Text> : null}
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Nombre</Text>
             <Text style={styles.infoValue}>{userName}</Text>
@@ -177,13 +295,14 @@ const styles = StyleSheet.create({
   },
   container: {
     padding: 20,
-    paddingBottom: 40,
+    paddingTop: 30,
+    paddingBottom: 180,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 32,
   },
   backButton: {
     width: 40,
@@ -211,6 +330,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 28,
     padding: 20,
+    paddingBottom: 28,
     shadowColor: '#0f172a',
     shadowOpacity: 0.06,
     shadowOffset: { width: 0, height: 10 },
@@ -222,6 +342,39 @@ const styles = StyleSheet.create({
     fontFamily: 'RobotoBold',
     color: '#0f172a',
     marginBottom: 14,
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginBottom: 18,
+    gap: 10,
+  },
+  avatarPlaceholder: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+  avatarImage: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 2,
+    borderColor: '#2563eb',
+  },
+  avatarActionButton: {
+    backgroundColor: '#dbeafe',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  avatarActionButtonText: {
+    color: '#1d4ed8',
+    fontFamily: 'RobotoBold',
+    fontSize: 13,
   },
   infoRow: {
     flexDirection: 'row',
@@ -240,7 +393,7 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   deleteButton: {
-    marginTop: 24,
+    marginTop: 36,
     backgroundColor: '#dc2626',
     borderRadius: 16,
     height: 52,
@@ -259,7 +412,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Roboto',
   },
   recentButton: {
-    marginTop: 24,
+    marginTop: 36,
     backgroundColor: '#3b82f6',
     borderRadius: 16,
     paddingVertical: 14,
