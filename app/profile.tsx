@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, Modal, StyleSheet, Image, Alert, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { useAuth } from '@/providers/AuthProvider';
 import { supabase } from '@/lib/supabase';
@@ -54,8 +54,9 @@ export default function Profile() {
   };
 
   const uploadAvatar = async (userId: string, uri: string) => {
+    const encoding = FileSystem.EncodingType?.Base64 ?? 'base64';
     const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding,
     });
     const arrayBuffer = decode(base64);
     const fileExt = uri.split('.').pop()?.toLowerCase() ?? 'jpg';

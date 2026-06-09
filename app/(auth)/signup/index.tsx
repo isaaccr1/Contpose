@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, Modal, ScrollView, Image, Alert, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 
 import { Logo } from '@/components/Logo';
@@ -122,8 +122,9 @@ export default function SignUp() {
   };
 
   const uploadAvatar = async (userId: string, uri: string) => {
+    const encoding = FileSystem.EncodingType?.Base64 ?? 'base64';
     const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding,
     });
     const arrayBuffer = decode(base64);
     const fileExt = uri.split('.').pop()?.toLowerCase() ?? 'jpg';

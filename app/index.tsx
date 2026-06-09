@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Image, Modal, Platform, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from '@expo/vector-icons';
 import { router } from "expo-router";
 
@@ -142,8 +142,9 @@ export default function Home() {
         </View>
       </Animated.View>
 
-      <Animated.View style={[styles.content, { opacity: contentOpacity }] }>
-        <Text style={styles.welcomeText}>¡Bienvenido, {userName}!</Text>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <Animated.View style={{ opacity: contentOpacity }}>
+          <Text style={styles.welcomeText}>¡Bienvenido, {userName}!</Text>
 
         <Animated.View style={[styles.heroCard, { transform: [{ translateY: heroY }] }] }>
           <View style={styles.heroImagePlaceholder}>
@@ -192,7 +193,8 @@ export default function Home() {
             </View>
           </TouchableOpacity>
         </Animated.View>
-      </Animated.View>
+        </Animated.View>
+      </ScrollView>
 
       <Animated.View style={[styles.bottomNav, { transform: [{ translateY: navY }] }] }>
         {navItems.map((item) => (
@@ -304,8 +306,10 @@ const styles = StyleSheet.create({
     fontFamily: 'Roboto',
     marginLeft: 6,
   },
-  content: {
+  scrollView: {
     flex: 1,
+  },
+  scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 24,
     paddingBottom: 90,
