@@ -5,6 +5,7 @@ import { router } from "expo-router";
 
 import { useAuth } from "@/providers/AuthProvider";
 import { supabase } from "@/lib/supabase";
+import usePostureStore from "@/stores/posture";
 
 const navItems = [
   { key: 'home', label: 'Inicio', icon: 'home-outline' },
@@ -22,6 +23,7 @@ export default function Home() {
   const { session, loading } = useAuth();
   const [modalTitle, setModalTitle] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('home');
+  const { latestAlert, isAnalyzing } = usePostureStore();
   const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
   const topBarY = useRef(new Animated.Value(-40)).current;
@@ -105,6 +107,12 @@ export default function Home() {
       return;
     }
 
+    if (item.key === 'camera') {
+      setActiveTab(item.key);
+      router.push('/camera');
+      return;
+    }
+
     openBlank(item.label, item.key);
   };
 
@@ -112,6 +120,8 @@ export default function Home() {
     await supabase.auth.signOut();
     router.replace('/signin');
   };
+
+  const closeModal = () => setModalTitle(null);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -142,7 +152,14 @@ export default function Home() {
           <View style={styles.heroInfo}>
             <Text style={styles.heroTitle}>Empieza tu Entrenamiento</Text>
             <Text style={styles.heroSubtitle}>Un camino más fuerte hacia una mejor postura.</Text>
-            <TouchableOpacity style={styles.heroButton} onPress={() => openBlank('Entrenamiento')}>
+            <Text style={styles.heroHint}>
+              {latestAlert
+                ? `Ultima alerta: ${latestAlert.bodyPart} - ${latestAlert.message}`
+                : isAnalyzing
+                  ? 'Analisis de postura en curso desde camara.'
+                  : 'Sin alertas activas. Abre Camara para iniciar analisis en vivo.'}
+            </Text>
+            <TouchableOpacity style={styles.heroButton} onPress={() => router.push('/camera')}>
               <Text style={styles.heroButtonText}>¡Comenzar!</Text>
             </TouchableOpacity>
           </View>
@@ -198,13 +215,13 @@ export default function Home() {
         visible={!!modalTitle}
         animationType="slide"
         transparent
-        onRequestClose={() => setModalTitle(null)}
+        onRequestClose={closeModal}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <Text style={styles.modalTitle}>{modalTitle}</Text>
             <Text style={styles.modalDescription}>Pantalla en blanco</Text>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setModalTitle(null)}>
+            <TouchableOpacity style={styles.closeButton} onPress={closeModal}>
               <Text style={styles.closeButtonText}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -324,8 +341,15 @@ const styles = StyleSheet.create({
   heroSubtitle: {
     fontSize: 14,
     color: '#c7d2fe',
-    marginBottom: 16,
+    marginBottom: 10,
     lineHeight: 20,
+  },
+  heroHint: {
+    fontSize: 13,
+    color: '#dbeafe',
+    lineHeight: 18,
+    marginBottom: 14,
+    fontFamily: 'Roboto',
   },
   heroButton: {
     backgroundColor: '#3b82f6',

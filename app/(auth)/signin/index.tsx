@@ -18,10 +18,27 @@ const signInSchema = z.object({
 });
 
 type SignInForm = z.infer<typeof signInSchema>;
+const LOGIN_TIMEOUT_MS = 12000;
 
 export default function SignIn() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const mapLoginError = (err: unknown) => {
+    if (err instanceof Error) {
+      if (err.message === 'LOGIN_TIMEOUT') {
+        return 'La conexión tardó demasiado. Verifica tu internet e inténtalo de nuevo.';
+      }
+
+      if (err.message.toLowerCase().includes('network request failed')) {
+        return 'No se pudo conectar al servidor. Revisa tu red o VPN e inténtalo nuevamente.';
+      }
+
+      return err.message;
+    }
+
+    return 'Ha ocurrido un error';
+  };
 
   const { control, handleSubmit, formState: { errors } } = useForm<SignInForm>({
     resolver: zodResolver(signInSchema)
@@ -31,20 +48,27 @@ export default function SignIn() {
     try {
       setLoading(true);
       setError(null);
-      
-      // TODO: ENVIAR DATOS A SUPABASE
 
-      const { error: loginError } = await supabase.auth.signInWithPassword({
+      const loginPromise = supabase.auth.signInWithPassword({
         email: data.email,
-        password: data.password
+        password: data.password,
       });
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const timeoutId = setTimeout(() => {
+          clearTimeout(timeoutId);
+          reject(new Error('LOGIN_TIMEOUT'));
+        }, LOGIN_TIMEOUT_MS);
+      });
+
+      const { error: loginError } = await Promise.race([loginPromise, timeoutPromise]);
 
       if (loginError) {
         throw loginError;
       }
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ha ocurrido un error');
+      setError(mapLoginError(err));
     } finally {
       setLoading(false);
     }

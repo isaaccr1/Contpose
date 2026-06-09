@@ -32,6 +32,12 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Permite usar la camara para analisis postural en vivo."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#ffffff"

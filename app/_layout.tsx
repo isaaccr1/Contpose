@@ -48,6 +48,12 @@ function InitialLayout() {
             headerShown: false,
           }}
         />
+        <Stack.Screen
+          name="camera"
+          options={{
+            headerShown: false,
+          }}
+        />
         <Stack.Screen name="+not-found" />
       </Stack>
 

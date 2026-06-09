@@ -24,19 +24,28 @@ export default function AuthProvider(props: Props) {
 
   useEffect(() => {
     async function fetchSession() {
-      const { error, data } = await supabase.auth.getSession();
+      try {
+        const { error, data } = await supabase.auth.getSession();
 
-      if (error) {
-        throw error;
-      }
+        if (error) {
+          console.warn("Error obteniendo sesion:", error.message);
+          setSession(null);
+          router.replace("/signin");
+          return;
+        }
 
-      if (data.session) {
-        setSession(data.session);
-      } else {
+        if (data.session) {
+          setSession(data.session);
+        } else {
+          router.replace("/signin");
+        }
+      } catch (error) {
+        console.warn("Error obteniendo sesion:", error);
+        setSession(null);
         router.replace("/signin");
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     }
 
     fetchSession();
