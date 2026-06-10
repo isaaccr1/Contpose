@@ -39,6 +39,16 @@ export default function CameraModule() {
   const poseRef = useRef<any>(null);
   const [webviewSupported, setWebviewSupported] = useState<boolean | null>(null);
   const cameraRef = useRef<Camera | null>(null);
+  const resolvedCameraType = ((): any => {
+    try {
+      if (typeof CameraType !== 'undefined' && CameraType) {
+        return facing === 'back' ? CameraType.back : CameraType.front;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return facing === 'back' ? 'back' : 'front';
+  })();
 
   useEffect(() => {
     let mounted = true;
@@ -162,7 +172,7 @@ export default function CameraModule() {
           <Camera
             ref={cameraRef}
             style={styles.webview}
-            type={facing === 'back' ? CameraType.back : CameraType.front}
+            type={resolvedCameraType}
             ratio="16:9"
           />
         ) : (
