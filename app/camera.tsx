@@ -39,6 +39,9 @@ export default function CameraModule() {
   const poseRef = useRef<any>(null);
   const [webviewSupported, setWebviewSupported] = useState<boolean | null>(null);
   const cameraRef = useRef<Camera | null>(null);
+  const webviewRef = useRef<any>(null);
+  const [webviewReady, setWebviewReady] = useState(false);
+  const captureIntervalRef = useRef<number | null>(null);
   const resolvedCameraType = ((): any => {
     try {
       if (typeof CameraType !== 'undefined' && CameraType) {
@@ -151,6 +154,41 @@ export default function CameraModule() {
     }
   };
 
+  // Capture loop: when WebView doesn't support getUserMedia, capture frames from native Camera and post them
+  useEffect(() => {
+    if (!isAnalyzing) {
+      if (captureIntervalRef.current) {
+        clearInterval(captureIntervalRef.current as any);
+        captureIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // only start native capture -> webview frames if webview explicitly lacks support and webview is ready
+    if (webviewSupported === false && webviewReady && cameraRef.current && cameraRef.current.takePictureAsync) {
+      // capture every 400ms
+      const intervalId = setInterval(async () => {
+        try {
+          const photo: any = await cameraRef.current?.takePictureAsync({ base64: true, quality: 0.4, skipProcessing: true });
+          if (photo && photo.base64 && webviewRef.current && webviewRef.current.postMessage) {
+            const data = { imageBase64: `data:image/jpeg;base64,${photo.base64}` };
+            webviewRef.current.postMessage(JSON.stringify(data));
+          }
+        } catch (e) {
+          // ignore capture errors silently
+        }
+      }, 400);
+
+      captureIntervalRef.current = intervalId as unknown as number;
+      return () => {
+        if (captureIntervalRef.current) {
+          clearInterval(captureIntervalRef.current as any);
+          captureIntervalRef.current = null;
+        }
+      };
+    }
+  }, [isAnalyzing, webviewSupported, webviewReady]);
+
   if (!permission) {
     return (
       <SafeAreaView style={styles.centered}>
@@ -205,6 +243,7 @@ export default function CameraModule() {
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
           startInLoadingState={true}
+          ref={webviewRef}
           source={{ html: `
             <!doctype html>
             <html>
@@ -224,6 +263,28 @@ export default function CameraModule() {
                     window.ReactNativeWebView.postMessage(JSON.stringify({__webrtcSupport: false}));
                   }
                 })();
+
+                // helper to convert dataURL to Blob
+                function dataURLtoBlob(dataurl) {
+                  var arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1], bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
+                  while(n--){ u8arr[n] = bstr.charCodeAt(n); }
+                  return new Blob([u8arr], {type:mime});
+                }
+
+                window.addEventListener('message', async (ev) => {
+                  try {
+                    const data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+                    if (data && data.imageBase64) {
+                      const blob = dataURLtoBlob(data.imageBase64);
+                      const imgBitmap = await createImageBitmap(blob);
+                      if (window._pose && window._pose.send) {
+                        await window._pose.send({ image: imgBitmap });
+                      }
+                    }
+                  } catch (e) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({__error: String(e)}));
+                  }
+                });
               </script>
               <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
               <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.min.js"></script>
@@ -232,8 +293,11 @@ export default function CameraModule() {
                 const FACING = '${facing === 'back' ? 'environment' : 'user'}';
                 async function init(){
                   try{
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: FACING }, audio: false });
-                    video.srcObject = stream;
+                    // try to start native camera in WebView (if available)
+                    if (navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: FACING }, audio: false });
+                      video.srcObject = stream;
+                    }
 
                     const pose = new Pose.Pose({locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/' + file});
                     pose.setOptions({modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false});
@@ -243,8 +307,15 @@ export default function CameraModule() {
                       }
                     });
 
-                    const camera = new CameraUtils.Camera(video, { onFrame: async () => { await pose.send({image: video}); }, width: 640, height: 480 });
-                    camera.start();
+                    window._pose = pose; // expose for postMessage-driven frames
+
+                    if (video && video.srcObject) {
+                      const camera = new CameraUtils.Camera(video, { onFrame: async () => { await pose.send({image: video}); }, width: 640, height: 480 });
+                      camera.start();
+                    }
+
+                    // signal ready
+                    window.ReactNativeWebView.postMessage(JSON.stringify({__poseReady: true}));
                   } catch(e){
                     window.ReactNativeWebView.postMessage(JSON.stringify({__error: String(e)}));
                   }
@@ -260,6 +331,10 @@ export default function CameraModule() {
               const payload = JSON.parse(e.nativeEvent.data);
               if (payload && typeof payload.__webrtcSupport !== 'undefined') {
                 setWebviewSupported(Boolean(payload.__webrtcSupport));
+                return;
+              }
+              if (payload && payload.__poseReady) {
+                setWebviewReady(true);
                 return;
               }
               if (payload && payload.__error) {
