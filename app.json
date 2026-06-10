@@ -10,6 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
+      ,"infoPlist": {
+        "NSCameraUsageDescription": "Permite usar la cámara para análisis postural en vivo.",
+        "NSMicrophoneUsageDescription": "Permite usar el micrófono si se solicita audio en futuras funciones."
+      }
     },
     "android": {
       "adaptiveIcon": {
