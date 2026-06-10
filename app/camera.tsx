@@ -179,7 +179,7 @@ export default function CameraModule() {
                     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
                     video.srcObject = stream;
 
-                    const pose = new Pose.Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`});
+                    const pose = new Pose.Pose({locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/' + file});
                     pose.setOptions({modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false});
                     pose.onResults((results) => {
                       if (results && results.poseLandmarks){
