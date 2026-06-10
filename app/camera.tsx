@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
@@ -31,6 +31,36 @@ export default function CameraModule() {
 
     return `Correccion: ${latestAlert.bodyPart}`;
   }, [isAnalyzing, latestAlert]);
+
+  // MediaPipe pose state (skeleton): se inicializa cuando se activa el analisis.
+  const [mediapipeReady, setMediapipeReady] = useState(false);
+  const [poseError, setPoseError] = useState<string | null>(null);
+  const poseRef = useRef<any>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const initPose = async () => {
+      try {
+        // Intento de import dinámico. En dispositivos móviles puede requerir otro enfoque.
+        const mp = await import('@mediapipe/pose');
+        if (!mounted) return;
+        poseRef.current = mp;
+        setMediapipeReady(true);
+      } catch (err: any) {
+        if (!mounted) return;
+        setPoseError('No se pudo cargar MediaPipe Pose. Comprueba dependencias.');
+      }
+    };
+
+    if (isAnalyzing && !poseRef.current) {
+      void initPose();
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [isAnalyzing]);
 
   if (!permission) {
     return (
@@ -85,7 +115,7 @@ export default function CameraModule() {
 
         <View style={styles.overlayBottom}>
           <View style={styles.exerciseRow}>
-            {['Sentadilla', 'Peso muerto', 'Plancha'].map((exercise) => (
+            {['Sentadilla', 'Abdominales'].map((exercise) => (
               <TouchableOpacity
                 key={exercise}
                 style={[styles.exerciseChip, currentExercise === exercise && styles.exerciseChipActive]}
