@@ -50,6 +50,27 @@ export default function CameraModule() {
     return facing === 'back' ? 'back' : 'front';
   })();
 
+  const renderNativeCamera = () => {
+    try {
+      if (!Camera) throw new Error('Camera component missing');
+      // Try to return Camera element; if Camera is not a valid component this will throw
+      return (
+        <Camera
+          ref={cameraRef}
+          style={styles.webview}
+          type={resolvedCameraType}
+          ratio="16:9"
+        />
+      );
+    } catch (err) {
+      return (
+        <View style={[styles.webview, { justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={{ color: '#fff' }}>Cámara no disponible en este entorno</Text>
+        </View>
+      );
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
 
