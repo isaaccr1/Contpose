@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraType, useCameraPermissions } from 'expo-camera';
+import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 
 import usePostureStore from '@/stores/posture';
@@ -62,6 +63,56 @@ export default function CameraModule() {
     };
   }, [isAnalyzing]);
 
+  // Simple analysis of landmarks received from WebView (MediaPipe)
+  const analyzeLandmarks = (landmarks: any[]) => {
+    if (!isAnalyzing || !landmarks || landmarks.length === 0) return;
+
+    // landmarks are normalized [0..1] with indices per MediaPipe pose
+    const leftHip = landmarks[23];
+    const rightHip = landmarks[24];
+    const leftKnee = landmarks[25];
+    const rightKnee = landmarks[26];
+    const leftAnkle = landmarks[27];
+    const rightAnkle = landmarks[28];
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
+
+    if (!leftHip || !leftAnkle || !rightHip || !rightAnkle) return;
+
+    const hipsX = ((leftHip.x ?? 0) + (rightHip.x ?? 0)) / 2;
+    const anklesX = ((leftAnkle.x ?? 0) + (rightAnkle.x ?? 0)) / 2;
+    const shouldersY = ((leftShoulder?.y ?? 0) + (rightShoulder?.y ?? 0)) / 2;
+    const hipsY = ((leftHip?.y ?? 0) + (rightHip?.y ?? 0)) / 2;
+
+    // Sentadilla: si los talones no están alineados verticalmente con las caderas
+    if (currentExercise === 'Sentadilla') {
+      const dx = Math.abs(hipsX - anklesX);
+      if (dx > 0.12) {
+        pushAlert({ bodyPart: 'Talones', message: 'Alinea tus talones con la cintura.', severity: 'medium' });
+        return;
+      }
+
+      // espalda muy inclinada: si la distancia vertical entre hombros y caderas es pequeña
+      if (Math.abs(shouldersY - hipsY) < 0.08) {
+        pushAlert({ bodyPart: 'Espalda', message: 'Endereza tu espalda.', severity: 'high' });
+        return;
+      }
+
+      clearAlert();
+    }
+
+    // Abdominales: comprobar si hay contracción (approx: hombros se acercan a caderas en Y)
+    if (currentExercise === 'Abdominales') {
+      const dy = hipsY - shouldersY; // positive when shoulders above hips
+      if (dy < 0.18) {
+        pushAlert({ bodyPart: 'Core', message: 'Activa tu core y mantén la espalda baja pegada.', severity: 'medium' });
+        return;
+      }
+
+      clearAlert();
+    }
+  };
+
   if (!permission) {
     return (
       <SafeAreaView style={styles.centered}>
@@ -99,7 +150,63 @@ export default function CameraModule() {
       </View>
 
       <View style={styles.cameraWrapper}>
-        <CameraView style={styles.camera} facing={facing} />
+        {/* WebView that runs MediaPipe Pose in-page and posts landmarks to React Native */}
+        <WebView
+          originWhitelist={["*"]}
+          javaScriptEnabled
+          domStorageEnabled
+          mixedContentMode="always"
+          source={{ html: `
+            <!doctype html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <style>html,body{margin:0;padding:0;background:#000}video{width:100%;height:100%;object-fit:cover}</style>
+            </head>
+            <body>
+              <video id="video" autoplay playsinline></video>
+              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
+              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.min.js"></script>
+              <script>
+                const video = document.getElementById('video');
+                async function init(){
+                  try{
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+                    video.srcObject = stream;
+
+                    const pose = new Pose.Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`});
+                    pose.setOptions({modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false});
+                    pose.onResults((results) => {
+                      if (results && results.poseLandmarks){
+                        window.ReactNativeWebView.postMessage(JSON.stringify(results.poseLandmarks));
+                      }
+                    });
+
+                    const camera = new CameraUtils.Camera(video, { onFrame: async () => { await pose.send({image: video}); }, width: 640, height: 480 });
+                    camera.start();
+                  } catch(e){
+                    window.ReactNativeWebView.postMessage(JSON.stringify({__error: String(e)}));
+                  }
+                }
+                init();
+              </script>
+            </body>
+            </html>
+          `}}
+          style={styles.webview}
+          onMessage={(e) => {
+            try {
+              const payload = JSON.parse(e.nativeEvent.data);
+              if (payload && payload.__error) {
+                setPoseError(String(payload.__error));
+                return;
+              }
+              analyzeLandmarks(payload);
+            } catch (err) {
+              // ignore parse errors
+            }
+          }}
+        />
 
         <View style={styles.overlayTop}>
           <View style={styles.statusChip}>
