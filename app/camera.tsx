@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraType, useCameraPermissions } from 'expo-camera';
+import { CameraType, useCameraPermissions, Camera } from 'expo-camera';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 
@@ -37,6 +37,8 @@ export default function CameraModule() {
   const [mediapipeReady, setMediapipeReady] = useState(false);
   const [poseError, setPoseError] = useState<string | null>(null);
   const poseRef = useRef<any>(null);
+  const [webviewSupported, setWebviewSupported] = useState<boolean | null>(null);
+  const cameraRef = useRef<Camera | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -156,6 +158,14 @@ export default function CameraModule() {
 
       <View style={styles.cameraWrapper}>
         {/* WebView that runs MediaPipe Pose in-page and posts landmarks to React Native */}
+        {webviewSupported === false ? (
+          <Camera
+            ref={cameraRef}
+            style={styles.webview}
+            type={facing === 'back' ? CameraType.back : CameraType.front}
+            ratio="16:9"
+          />
+        ) : (
         <WebView
           originWhitelist={["*"]}
           javaScriptEnabled
@@ -173,6 +183,17 @@ export default function CameraModule() {
             </head>
             <body>
               <video id="video" autoplay playsinline></video>
+              <script>
+                // report whether getUserMedia is available in this WebView
+                (function(){
+                  try{
+                    const supported = !!(navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+                    window.ReactNativeWebView.postMessage(JSON.stringify({__webrtcSupport: supported}));
+                  }catch(e){
+                    window.ReactNativeWebView.postMessage(JSON.stringify({__webrtcSupport: false}));
+                  }
+                })();
+              </script>
               <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
               <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.min.js"></script>
               <script>
@@ -206,6 +227,10 @@ export default function CameraModule() {
           onMessage={(e) => {
             try {
               const payload = JSON.parse(e.nativeEvent.data);
+              if (payload && typeof payload.__webrtcSupport !== 'undefined') {
+                setWebviewSupported(Boolean(payload.__webrtcSupport));
+                return;
+              }
               if (payload && payload.__error) {
                 setPoseError(String(payload.__error));
                 return;
@@ -216,6 +241,7 @@ export default function CameraModule() {
             }
           }}
         />
+        )}
 
           {poseError ? (
             <View style={[styles.statusChip, {position: 'absolute', top: 80, left: 16, right: 16}] }>
