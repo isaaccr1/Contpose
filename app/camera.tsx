@@ -161,6 +161,9 @@ export default function CameraModule() {
           javaScriptEnabled
           domStorageEnabled
           mixedContentMode="always"
+          allowsInlineMediaPlayback={true}
+          mediaPlaybackRequiresUserAction={false}
+          startInLoadingState={true}
           source={{ html: `
             <!doctype html>
             <html>
@@ -174,9 +177,10 @@ export default function CameraModule() {
               <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.min.js"></script>
               <script>
                 const video = document.getElementById('video');
+                const FACING = '${facing === 'back' ? 'environment' : 'user'}';
                 async function init(){
                   try{
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: FACING }, audio: false });
                     video.srcObject = stream;
 
                     const pose = new Pose.Pose({locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/' + file});
@@ -212,6 +216,12 @@ export default function CameraModule() {
             }
           }}
         />
+
+          {poseError ? (
+            <View style={[styles.statusChip, {position: 'absolute', top: 80, left: 16, right: 16}] }>
+              <Text style={[styles.statusChipText]}>Error cámara: {poseError}</Text>
+            </View>
+          ) : null}
 
         <View style={styles.overlayTop}>
           <View style={styles.statusChip}>
