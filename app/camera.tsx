@@ -228,12 +228,7 @@ export default function CameraModule() {
       <View style={styles.cameraWrapper}>
         {/* WebView that runs MediaPipe Pose in-page and posts landmarks to React Native */}
         {webviewSupported === false ? (
-          <Camera
-            ref={cameraRef}
-            style={styles.webview}
-            type={resolvedCameraType}
-            ratio="16:9"
-          />
+          renderNativeCamera()
         ) : (
         <WebView
           originWhitelist={["*"]}
