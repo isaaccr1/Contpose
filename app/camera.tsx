@@ -64,6 +64,11 @@ export default function CameraModule() {
   }, [isAnalyzing]);
 
   // Simple analysis of landmarks received from WebView (MediaPipe)
+  // Thresholds (ajustables)
+  const HEELS_ALIGN_THRESHOLD = 0.10; // tolerancia X entre caderas y talones
+  const SPINE_STRAIGHTNESS_THRESHOLD = 0.12; // diferencia Y mínima hombros-caderas para considerar postura erguida
+  const ABDOMINAL_DY_THRESHOLD = 0.20; // distancia Y mínima hombros-caderas para abdominales
+
   const analyzeLandmarks = (landmarks: any[]) => {
     if (!isAnalyzing || !landmarks || landmarks.length === 0) return;
 
@@ -87,13 +92,13 @@ export default function CameraModule() {
     // Sentadilla: si los talones no están alineados verticalmente con las caderas
     if (currentExercise === 'Sentadilla') {
       const dx = Math.abs(hipsX - anklesX);
-      if (dx > 0.12) {
+      if (dx > HEELS_ALIGN_THRESHOLD) {
         pushAlert({ bodyPart: 'Talones', message: 'Alinea tus talones con la cintura.', severity: 'medium' });
         return;
       }
 
       // espalda muy inclinada: si la distancia vertical entre hombros y caderas es pequeña
-      if (Math.abs(shouldersY - hipsY) < 0.08) {
+      if (Math.abs(shouldersY - hipsY) < SPINE_STRAIGHTNESS_THRESHOLD) {
         pushAlert({ bodyPart: 'Espalda', message: 'Endereza tu espalda.', severity: 'high' });
         return;
       }
@@ -104,7 +109,7 @@ export default function CameraModule() {
     // Abdominales: comprobar si hay contracción (approx: hombros se acercan a caderas en Y)
     if (currentExercise === 'Abdominales') {
       const dy = hipsY - shouldersY; // positive when shoulders above hips
-      if (dy < 0.18) {
+      if (dy < ABDOMINAL_DY_THRESHOLD) {
         pushAlert({ bodyPart: 'Core', message: 'Activa tu core y mantén la espalda baja pegada.', severity: 'medium' });
         return;
       }
