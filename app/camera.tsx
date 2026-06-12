@@ -23,6 +23,7 @@ export default function CameraModule() {
   const [detectorReady, setDetectorReady] = useState(false);
   const [containerSize, setContainerSize] = useState<ContainerSize>({ width: 0, height: 0 });
   const [activeKeypoints, setActiveKeypoints] = useState<any[]>([]);
+  const [imageDims, setImageDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const isMountedRef   = useRef(true);
   const isAnalyzingRef = useRef(false);
 
@@ -108,6 +109,9 @@ export default function CameraModule() {
       if (!pose?.keypoints) return;
 
       setActiveKeypoints(pose.keypoints);
+      if (pose.imageWidth && pose.imageHeight) {
+        setImageDims({ w: pose.imageWidth, h: pose.imageHeight });
+      }
 
       if (isSquat) {
         const next = analyzeSquatFrame(pose.keypoints, squatStateRef.current);
@@ -282,8 +286,11 @@ export default function CameraModule() {
             keypoints={activeKeypoints}
             containerWidth={containerSize.width}
             containerHeight={containerSize.height}
+            imageWidth={imageDims.w}
+            imageHeight={imageDims.h}
             badPosture={badPosture}
             activeSide={activeSide}
+            facing={facing}
           />
         )}
 

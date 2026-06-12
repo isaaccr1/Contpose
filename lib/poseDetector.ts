@@ -27,7 +27,7 @@ export async function estimatePoseFromCameraAsync(cameraRef: any): Promise<any |
     const method = camera.takePictureAsync ?? camera.takePicture;
     if (typeof method !== 'function') return null;
 
-    const photo = await method.call(camera, { base64: false, quality: 0.3, skipProcessing: true });
+    const photo = await method.call(camera, { base64: false, quality: 0.4 });
     if (!photo?.uri) return null;
 
     const response = await fetch(photo.uri);
@@ -58,7 +58,7 @@ export async function estimatePoseFromCameraAsync(cameraRef: any): Promise<any |
         y: kp.y / imgH,
       }));
 
-      return { ...pose, keypoints: normalizedKeypoints };
+      return { ...pose, keypoints: normalizedKeypoints, imageWidth: imgW, imageHeight: imgH };
     } finally {
       imageTensor.dispose();
     }
