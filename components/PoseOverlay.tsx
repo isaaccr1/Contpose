@@ -31,22 +31,20 @@ interface Props {
 }
 
 /**
- * Maps a normalized keypoint [0,1] to display coordinates inside the container,
- * accounting for the "cover" crop that CameraView applies when the camera image
- * has a different aspect ratio than the container.
+ * Maps raw pixel coordinates from the captured image to display coordinates
+ * inside the container, accounting for the "cover" crop that CameraView applies.
  *
- * With skipProcessing removed, iOS returns correctly oriented images, so:
- *   - Portrait phone → portrait image (H > W)
- *   - Camera image AR may differ from container AR → cover crop applies
+ * Keypoints are now in raw pixels (not normalized) so angles in the detectors
+ * are computed in a uniform coordinate space — no aspect-ratio distortion.
  */
 function coverMap(
-  nx: number, ny: number,
+  px: number, py: number,
   imgW: number, imgH: number,
   contW: number, contH: number,
   mirrorX = false,
 ): { x: number; y: number } {
   if (imgW === 0 || imgH === 0 || contW === 0 || contH === 0) {
-    return { x: nx * contW, y: ny * contH };
+    return { x: 0, y: 0 };
   }
 
   const imgAR  = imgW / imgH;
@@ -56,17 +54,17 @@ function coverMap(
   let y: number;
 
   if (imgAR > contAR) {
-    // Image is wider than container → scaled to fit height, width cropped
+    // Image wider than container → scale to fit height, crop sides
     const scale   = contH / imgH;
     const xOffset = (imgW * scale - contW) / 2;
-    x = nx * imgW * scale - xOffset;
-    y = ny * contH;
+    x = px * scale - xOffset;
+    y = py * scale;
   } else {
-    // Image is taller than container → scaled to fit width, height cropped
+    // Image taller than container → scale to fit width, crop top/bottom
     const scale   = contW / imgW;
     const yOffset = (imgH * scale - contH) / 2;
-    x = nx * contW;
-    y = ny * imgH * scale - yOffset;
+    x = px * scale;
+    y = py * scale - yOffset;
   }
 
   if (mirrorX) x = contW - x;

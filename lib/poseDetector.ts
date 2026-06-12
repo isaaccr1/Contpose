@@ -51,14 +51,12 @@ export async function estimatePoseFromCameraAsync(cameraRef: any): Promise<any |
       // Reject detections where the overall pose score is too low
       if ((pose.score ?? 0) < 0.2) return null;
 
-      // Normalize keypoints to [0,1] so overlay maps to any display size
-      const normalizedKeypoints = pose.keypoints.map((kp: any) => ({
-        ...kp,
-        x: kp.x / imgW,
-        y: kp.y / imgH,
-      }));
-
-      return { ...pose, keypoints: normalizedKeypoints, imageWidth: imgW, imageHeight: imgH };
+      // Return raw pixel coordinates + image dimensions.
+      // Non-uniform normalization (x/imgW, y/imgH) distorts angle vectors when
+      // imgW ≠ imgH, causing wrong kneeAngle / trunkElevation in the detectors.
+      // PoseOverlay uses imageWidth/imageHeight to apply the correct cover-crop
+      // transform itself.
+      return { ...pose, imageWidth: imgW, imageHeight: imgH };
     } finally {
       imageTensor.dispose();
     }
@@ -68,7 +66,9 @@ export async function estimatePoseFromCameraAsync(cameraRef: any): Promise<any |
     if (
       msg.includes('unmounted') ||
       msg.includes('Camera is not running') ||
-      msg.includes('not running')
+      msg.includes('not running') ||
+      msg.includes('Image could not be captured') ||
+      msg.includes('could not be captured')
     ) {
       return null;
     }

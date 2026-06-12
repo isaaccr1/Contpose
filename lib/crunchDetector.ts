@@ -119,7 +119,8 @@ export function analyzeCrunchFrame(rawKeypoints: Kp[], prevState: CrunchState): 
   let lastRepCounted = false;
 
   // State machine: flat → crunched → flat = 1 rep
-  if (trunk <= 10) {
+  // 15° flat threshold: more lenient than 10° for surface/posture variance
+  if (trunk <= 15) {
     isDown = true;
     if (isUp) {
       totalRepsAttempted += 1;
@@ -131,7 +132,8 @@ export function analyzeCrunchFrame(rawKeypoints: Kp[], prevState: CrunchState): 
       hadBadPostureDuringRep = false;
     }
   }
-  if (isDown && trunk >= 28) {
+  // 25° up threshold: ~same as clinical reference (28°) but slightly more lenient
+  if (isDown && trunk >= 25) {
     isUp = true;
   }
 

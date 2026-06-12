@@ -37,6 +37,12 @@ async function getExerciseId(exerciseName: string): Promise<number | null> {
 }
 
 export async function saveWorkoutSession(data: WorkoutSaveData): Promise<string | null> {
+  // Ensure the public.users row exists before inserting the workout.
+  // workouts.user_id has a FK to public.users.id, not directly to auth.users.
+  await supabase
+    .from('users')
+    .upsert({ id: data.userId, fecha_registro: new Date().toISOString() }, { onConflict: 'id', ignoreDuplicates: true });
+
   const { data: workout, error: wErr } = await supabase
     .from('workouts')
     .insert({

@@ -114,15 +114,16 @@ export function analyzeSquatFrame(rawKeypoints: Kp[], prevState: SquatState): Sq
       hadBadPostureDuringRep = false;
     }
   }
-  if (isUp && kneeAngle <= 70) {
+  // 115° ≈ just past parallel — counts regular squats without requiring extreme depth
+  if (isUp && kneeAngle <= 115) {
     isDown = true;
   }
 
   const phase: SquatState['phase'] = isDown ? 'down' : (isUp ? 'up' : 'idle');
 
-  // Posture checks — only during the squat itself (knee < 130°)
+  // Posture checks — active during descent and bottom (knee < 150°)
   const issues: SquatIssue[] = [];
-  if (kneeAngle < 130) {
+  if (kneeAngle < 150) {
     // 1. Head forward: ear-shoulder vector vs vertical
     if (ear) {
       const neckAngle = angleWithVertical(ear.x - shoulder.x, ear.y - shoulder.y);
