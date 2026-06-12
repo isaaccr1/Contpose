@@ -22,6 +22,7 @@ export type CrunchIssue = { label: string; message: string };
 
 export type CrunchState = {
   repCount: number;
+  totalRepsAttempted: number;
   isDown: boolean;       // lying flat  (trunk ≤ 10°)
   isUp: boolean;         // crunched up (trunk ≥ 28°)
   hadBadPostureDuringRep: boolean;
@@ -38,6 +39,7 @@ export type CrunchState = {
 export function createInitialCrunchState(): CrunchState {
   return {
     repCount: 0,
+    totalRepsAttempted: 0,
     isDown: false,
     isUp: false,
     hadBadPostureDuringRep: false,
@@ -113,14 +115,14 @@ export function analyzeCrunchFrame(rawKeypoints: Kp[], prevState: CrunchState): 
   const trunk = trunkElevation(shoulder, hip);
   const kneeAng = calcAngle(hip, knee, ankle);
 
-  let { isDown, isUp, hadBadPostureDuringRep, repCount } = prevState;
+  let { isDown, isUp, hadBadPostureDuringRep, repCount, totalRepsAttempted } = prevState;
   let lastRepCounted = false;
 
   // State machine: flat → crunched → flat = 1 rep
   if (trunk <= 10) {
     isDown = true;
     if (isUp) {
-      // Completed a rep coming back down
+      totalRepsAttempted += 1;
       if (!hadBadPostureDuringRep) {
         repCount += 1;
         lastRepCounted = true;
@@ -164,6 +166,7 @@ export function analyzeCrunchFrame(rawKeypoints: Kp[], prevState: CrunchState): 
 
   return {
     repCount,
+    totalRepsAttempted,
     isDown,
     isUp,
     hadBadPostureDuringRep,

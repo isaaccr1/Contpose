@@ -54,6 +54,12 @@ function InitialLayout() {
             headerShown: false,
           }}
         />
+        <Stack.Screen
+          name="historial"
+          options={{
+            headerShown: false,
+          }}
+        />
         <Stack.Screen name="+not-found" />
       </Stack>
 

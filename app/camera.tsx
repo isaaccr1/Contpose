@@ -9,10 +9,14 @@ import { analyzeSquatFrame, createInitialSquatState, SquatState } from '@/lib/sq
 import { analyzeCrunchFrame, createInitialCrunchState, CrunchState } from '@/lib/crunchDetector';
 import SquatFeedback, { ExerciseFeedbackState } from '@/components/SquatFeedback';
 import PoseOverlay from '@/components/PoseOverlay';
+import WorkoutResultsModal, { WorkoutResult } from '@/components/WorkoutResultsModal';
+import { saveWorkoutSession, ErrorLogEntry } from '@/lib/workoutService';
+import { useAuth } from '@/providers/AuthProvider';
 
 type ContainerSize = { width: number; height: number };
 
 export default function CameraModule() {
+  const { session } = useAuth();
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const cameraRef = useRef<any>(null);
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
@@ -28,18 +32,27 @@ export default function CameraModule() {
   const squatStateRef  = useRef<SquatState>(createInitialSquatState());
   const crunchStateRef = useRef<CrunchState>(createInitialCrunchState());
 
+  // Session tracking
+  const sessionStartRef  = useRef<number | null>(null);
+  const errorLogsRef     = useRef<ErrorLogEntry[]>([]);
+  const errorCountsRef   = useRef<Record<string, number>>({});
+  const prevIssueLabelsRef = useRef<Set<string>>(new Set());
+
+  // Results modal
+  const [showResults, setShowResults] = useState(false);
+  const [workoutResult, setWorkoutResult] = useState<WorkoutResult | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const { isAnalyzing, currentExercise, setAnalyzing, setExercise } = usePostureStore();
 
   const isSquat  = currentExercise === 'Sentadilla';
   const isCrunch = currentExercise === 'Abdominales';
 
-  // Track mount state to avoid setState after unmount
   useEffect(() => {
     isMountedRef.current = true;
     return () => { isMountedRef.current = false; };
   }, []);
 
-  // Keep refs in sync with state for closure-safe interval access
   useEffect(() => { squatStateRef.current  = squatState;  }, [squatState]);
   useEffect(() => { crunchStateRef.current = crunchState; }, [crunchState]);
 
@@ -65,6 +78,28 @@ export default function CameraModule() {
     })();
   }, []);
 
+  const trackErrors = (issues: Array<{ label: string }>) => {
+    const currentLabels = new Set(issues.map((i) => i.label));
+    // Only log errors that are new this frame (not already flagged last frame)
+    const newLabels = [...currentLabels].filter((l) => !prevIssueLabelsRef.current.has(l));
+    if (newLabels.length > 0) {
+      const elapsed = sessionStartRef.current ? (Date.now() - sessionStartRef.current) / 1000 : 0;
+      const angles: Record<string, number> = {};
+      if (isSquat) {
+        if (squatStateRef.current.kneeAngle != null)  angles.rodilla = Math.round(squatStateRef.current.kneeAngle);
+        if (squatStateRef.current.torsoAngle != null) angles.torso   = Math.round(squatStateRef.current.torsoAngle);
+      } else if (isCrunch) {
+        if (crunchStateRef.current.trunkAngle != null) angles.tronco = Math.round(crunchStateRef.current.trunkAngle);
+        if (crunchStateRef.current.kneeAngle  != null) angles.rodilla = Math.round(crunchStateRef.current.kneeAngle);
+      }
+      errorLogsRef.current.push({ timestampFrame: elapsed, issues: newLabels, angles });
+      newLabels.forEach((l) => {
+        errorCountsRef.current[l] = (errorCountsRef.current[l] ?? 0) + 1;
+      });
+    }
+    prevIssueLabelsRef.current = currentLabels;
+  };
+
   const analyzeCurrentFrame = async () => {
     if (!isAnalyzingRef.current || !isMountedRef.current || !detectorReady || !cameraRef.current) return;
     try {
@@ -78,13 +113,15 @@ export default function CameraModule() {
         const next = analyzeSquatFrame(pose.keypoints, squatStateRef.current);
         squatStateRef.current = next;
         setSquatState(next);
+        trackErrors(next.issues);
       } else if (isCrunch) {
         const next = analyzeCrunchFrame(pose.keypoints, crunchStateRef.current);
         crunchStateRef.current = next;
         setCrunchState(next);
+        trackErrors(next.issues);
       }
-    } catch (e) {
-      // Ignore — camera lifecycle errors are handled inside poseDetector
+    } catch {
+      // Camera lifecycle errors are handled inside poseDetector
     }
   };
 
@@ -97,7 +134,6 @@ export default function CameraModule() {
   }, [isAnalyzing, detectorReady, currentExercise]);
 
   const selectExercise = (exercise: string) => {
-    // Reset the state of the selected exercise
     if (exercise === 'Sentadilla') {
       const s = createInitialSquatState();
       setSquatState(s);
@@ -108,6 +144,10 @@ export default function CameraModule() {
       crunchStateRef.current = s;
     }
     setActiveKeypoints([]);
+    errorLogsRef.current = [];
+    errorCountsRef.current = {};
+    prevIssueLabelsRef.current = new Set();
+    sessionStartRef.current = Date.now();
     setExercise(exercise);
     setAnalyzing(true);
   };
@@ -116,6 +156,51 @@ export default function CameraModule() {
     isAnalyzingRef.current = false;
     setAnalyzing(false);
     setActiveKeypoints([]);
+
+    const durationSec = sessionStartRef.current
+      ? Math.round((Date.now() - sessionStartRef.current) / 1000)
+      : 0;
+
+    const state = isSquat ? squatStateRef.current : isCrunch ? crunchStateRef.current : null;
+    if (!state || state.totalRepsAttempted === 0) return;
+
+    setWorkoutResult({
+      exerciseName: currentExercise,
+      totalReps: state.totalRepsAttempted,
+      correctReps: state.repCount,
+      duration: durationSec,
+      errorCounts: { ...errorCountsRef.current },
+    });
+    setShowResults(true);
+  };
+
+  const handleSave = async () => {
+    if (!workoutResult || !session?.user?.id) return;
+    setSaving(true);
+    await saveWorkoutSession({
+      userId: session.user.id,
+      exerciseName: workoutResult.exerciseName,
+      totalReps: workoutResult.totalReps,
+      correctReps: workoutResult.correctReps,
+      duration: workoutResult.duration,
+      errorLogs: errorLogsRef.current,
+    });
+    setSaving(false);
+    closeResults();
+  };
+
+  const closeResults = () => {
+    setShowResults(false);
+    setWorkoutResult(null);
+    const squat = createInitialSquatState();
+    const crunch = createInitialCrunchState();
+    setSquatState(squat);
+    squatStateRef.current = squat;
+    setCrunchState(crunch);
+    crunchStateRef.current = crunch;
+    errorLogsRef.current = [];
+    errorCountsRef.current = {};
+    sessionStartRef.current = null;
   };
 
   const handleCameraLayout = (e: LayoutChangeEvent) => {
@@ -123,7 +208,6 @@ export default function CameraModule() {
     setContainerSize({ width, height });
   };
 
-  // Build a unified feedback state for the SquatFeedback component
   const feedbackState: ExerciseFeedbackState | null = (() => {
     if (isSquat) return {
       repCount: squatState.repCount,
@@ -148,17 +232,8 @@ export default function CameraModule() {
     return null;
   })();
 
-  const activeSide = isSquat
-    ? squatState.activeSide
-    : isCrunch
-    ? crunchState.activeSide
-    : null;
-
-  const badPosture = isSquat
-    ? squatState.badPosture
-    : isCrunch
-    ? crunchState.badPosture
-    : false;
+  const activeSide = isSquat ? squatState.activeSide : isCrunch ? crunchState.activeSide : null;
+  const badPosture = isSquat ? squatState.badPosture : isCrunch ? crunchState.badPosture : false;
 
   if (permissionGranted === null) {
     return (
@@ -202,7 +277,6 @@ export default function CameraModule() {
       <View style={styles.cameraContainer} onLayout={handleCameraLayout}>
         <CameraView ref={cameraRef} style={styles.camera} facing={facing} />
 
-        {/* Skeleton + keypoint overlay — shown for both exercises */}
         {isAnalyzing && activeKeypoints.length > 0 && (
           <PoseOverlay
             keypoints={activeKeypoints}
@@ -213,7 +287,6 @@ export default function CameraModule() {
           />
         )}
 
-        {/* Rep counter + posture feedback */}
         {isAnalyzing && feedbackState && (
           <SquatFeedback
             state={feedbackState}
@@ -227,7 +300,6 @@ export default function CameraModule() {
         )}
       </View>
 
-      {/* Exercise buttons */}
       <View style={styles.controls}>
         {!isAnalyzing ? (
           <>
@@ -270,6 +342,14 @@ export default function CameraModule() {
           </Text>
         </View>
       )}
+
+      <WorkoutResultsModal
+        visible={showResults}
+        result={workoutResult}
+        saving={saving}
+        onSave={handleSave}
+        onDiscard={closeResults}
+      />
     </SafeAreaView>
   );
 }

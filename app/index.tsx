@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from '@expo/vector-icons';
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 
 import { useAuth } from "@/providers/AuthProvider";
 import { supabase } from "@/lib/supabase";
 import usePostureStore from "@/stores/posture";
+import { getWeeklyWorkouts, calcWeeklyAccuracy } from "@/lib/workoutService";
 
 const navItems = [
   { key: 'home', label: 'Inicio', icon: 'home-outline' },
@@ -23,8 +24,23 @@ export default function Home() {
   const { session, loading } = useAuth();
   const [modalTitle, setModalTitle] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('home');
+  const [weeklyAccuracy, setWeeklyAccuracy] = useState<number | null>(null);
+  const [weeklyCount, setWeeklyCount] = useState(0);
   const { latestAlert, isAnalyzing } = usePostureStore();
   const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
+
+  const loadWeeklyProgress = useCallback(async () => {
+    if (!session?.user?.id) return;
+    const data = await getWeeklyWorkouts(session.user.id);
+    setWeeklyCount(data.length);
+    setWeeklyAccuracy(calcWeeklyAccuracy(data));
+  }, [session?.user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadWeeklyProgress();
+    }, [loadWeeklyProgress])
+  );
 
   const topBarY = useRef(new Animated.Value(-40)).current;
   const contentOpacity = useRef(new Animated.Value(0)).current;
@@ -113,6 +129,12 @@ export default function Home() {
       return;
     }
 
+    if (item.key === 'history') {
+      setActiveTab(item.key);
+      router.push('/historial');
+      return;
+    }
+
     openBlank(item.label, item.key);
   };
 
@@ -180,16 +202,24 @@ export default function Home() {
         </Animated.View>
 
         <Animated.View style={{ transform: [{ translateY: card2Y }] }}>
-          <TouchableOpacity style={styles.card} onPress={() => openBlank('Progreso Semanal')}>
+          <TouchableOpacity style={styles.card} onPress={() => router.push('/historial')}>
             <View style={styles.cardIconContainerSecondary}>
               <Ionicons name="trending-up-outline" size={20} color="#fff" />
             </View>
             <View style={styles.cardTextContainer}>
               <Text style={styles.cardTitle}>Progreso Semanal</Text>
-              <Text style={styles.cardSubtitle}>78% de tu meta semanal alcanzada.</Text>
+              <Text style={styles.cardSubtitle}>
+                {weeklyAccuracy === null
+                  ? 'Cargando...'
+                  : weeklyCount === 0
+                  ? 'Sin entrenamientos esta semana.'
+                  : `${weeklyCount} entrenamiento${weeklyCount > 1 ? 's' : ''} esta semana · ${weeklyAccuracy}% precisión`}
+              </Text>
             </View>
             <View style={styles.progressBadge}>
-              <Text style={styles.progressBadgeText}>78%</Text>
+              <Text style={styles.progressBadgeText}>
+                {weeklyAccuracy !== null ? `${weeklyAccuracy}%` : '–'}
+              </Text>
             </View>
           </TouchableOpacity>
         </Animated.View>

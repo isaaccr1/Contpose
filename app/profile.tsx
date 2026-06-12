@@ -1,36 +1,13 @@
-import { useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, Modal, StyleSheet, Image, Alert, Linking } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, SafeAreaView, ScrollView, View, Text, TouchableOpacity, Modal, StyleSheet, Image, Alert, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { useAuth } from '@/providers/AuthProvider';
 import { supabase } from '@/lib/supabase';
-import { router } from 'expo-router';
-
-const recentWorkouts = [
-  {
-    id: '1',
-    title: 'Rutina de fuerza general',
-    date: '28 de abril',
-    description: 'Trabajo de piernas y core con foco en postura.',
-    score: '82% de precisión',
-  },
-  {
-    id: '2',
-    title: 'Sesión de movilidad',
-    date: '26 de abril',
-    description: 'Estiramientos dinámicos y corrección postural.',
-    score: '90% de estabilidad',
-  },
-  {
-    id: '3',
-    title: 'Entrenamiento de espalda',
-    date: '24 de abril',
-    description: 'Ejercicios de postura y alineación de hombros.',
-    score: '78% de consistencia',
-  },
-];
+import { router, useFocusEffect } from 'expo-router';
+import { getRecentWorkouts, WorkoutRecord, formatDuration, formatWorkoutDate } from '@/lib/workoutService';
 
 export default function Profile() {
   const { session, loading } = useAuth();
@@ -41,6 +18,19 @@ export default function Profile() {
   const [avatarUpdating, setAvatarUpdating] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.user.user_metadata?.avatar_url ?? null);
+  const [recentWorkouts, setRecentWorkouts] = useState<WorkoutRecord[]>([]);
+  const [loadingRecent, setLoadingRecent] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!session?.user?.id) return;
+      setLoadingRecent(true);
+      getRecentWorkouts(session.user.id, 3).then((data) => {
+        setRecentWorkouts(data);
+        setLoadingRecent(false);
+      });
+    }, [session?.user?.id])
+  );
 
   const mapSupabaseError = (error: unknown, fallback: string) => {
     const message = (error as { message?: string })?.message?.trim();
@@ -298,8 +288,50 @@ export default function Profile() {
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalContainer}>
-              <Text style={styles.modalTitle}>Entrenamientos recientes</Text>
-              <Text style={styles.modalDescription}>Pantalla en blanco</Text>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Últimos 3 días</Text>
+                <TouchableOpacity onPress={() => setShowResults(false)}>
+                  <Ionicons name="close" size={22} color="#475569" />
+                </TouchableOpacity>
+              </View>
+
+              {loadingRecent ? (
+                <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                  <ActivityIndicator color="#1e3a8a" />
+                </View>
+              ) : recentWorkouts.length === 0 ? (
+                <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                  <Ionicons name="fitness-outline" size={40} color="#cbd5e1" />
+                  <Text style={styles.emptyText}>Sin entrenamientos en los últimos 3 días.</Text>
+                </View>
+              ) : (
+                recentWorkouts.map((w) => {
+                  const totalCorrect  = w.sets.reduce((s, x) => s + x.repeticiones, 0);
+                  const totalAttempts = w.sets.reduce((s, x) => s + x.repeticiones + x.errores_postura, 0);
+                  const accuracy      = totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : 0;
+                  const exerciseNames = [...new Set(w.sets.map((s) => s.exercises?.nombre).filter(Boolean))];
+                  const accuracyColor = accuracy >= 80 ? '#22c55e' : accuracy >= 60 ? '#f59e0b' : '#ef4444';
+                  return (
+                    <View key={w.id} style={styles.recentCard}>
+                      <View style={styles.recentCardTop}>
+                        <Text style={styles.recentExercise}>
+                          {exerciseNames.length > 0 ? exerciseNames.join(', ') : 'Entrenamiento'}
+                        </Text>
+                        <Text style={[styles.recentAccuracy, { color: accuracyColor }]}>{accuracy}%</Text>
+                      </View>
+                      <Text style={styles.recentDate}>{formatWorkoutDate(w.fecha)}</Text>
+                      <View style={styles.recentStats}>
+                        <Text style={styles.recentStat}>{formatDuration(w.duracion)}</Text>
+                        <Text style={styles.recentStat}>·</Text>
+                        <Text style={styles.recentStat}>{totalCorrect} reps correctas</Text>
+                        <Text style={styles.recentStat}>·</Text>
+                        <Text style={styles.recentStat}>{totalAttempts - totalCorrect} errores</Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+
               <TouchableOpacity style={styles.closeButton} onPress={() => setShowResults(false)}>
                 <Text style={styles.closeButtonText}>Cerrar</Text>
               </TouchableOpacity>
@@ -582,11 +614,16 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   modalTitle: {
     fontSize: 20,
     fontFamily: 'RobotoBold',
     color: '#0f172a',
-    marginBottom: 10,
   },
   modalDescription: {
     fontSize: 15,
@@ -594,5 +631,47 @@ const styles = StyleSheet.create({
     color: '#475569',
     lineHeight: 22,
     marginBottom: 20,
+  },
+  emptyText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#94a3b8',
+    textAlign: 'center',
+  },
+  recentCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 10,
+  },
+  recentCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  recentExercise: {
+    fontSize: 15,
+    fontFamily: 'RobotoBold',
+    color: '#1e293b',
+  },
+  recentAccuracy: {
+    fontSize: 14,
+    fontFamily: 'RobotoBold',
+  },
+  recentDate: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginBottom: 8,
+  },
+  recentStats: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  recentStat: {
+    fontSize: 12,
+    color: '#64748b',
+    fontFamily: 'Roboto',
   },
 });

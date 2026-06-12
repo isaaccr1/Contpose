@@ -11,6 +11,7 @@ export type SquatIssue = { label: string; message: string };
 
 export type SquatState = {
   repCount: number;
+  totalRepsAttempted: number;
   isUp: boolean;
   isDown: boolean;
   hadBadPostureDuringRep: boolean;
@@ -27,6 +28,7 @@ export type SquatState = {
 export function createInitialSquatState(): SquatState {
   return {
     repCount: 0,
+    totalRepsAttempted: 0,
     isUp: false,
     isDown: false,
     hadBadPostureDuringRep: false,
@@ -96,14 +98,14 @@ export function analyzeSquatFrame(rawKeypoints: Kp[], prevState: SquatState): Sq
   const kneeAngle  = calcAngle(hip, knee, ankle);
   const torsoAngle = angleWithVertical(shoulder.x - hip.x, shoulder.y - hip.y);
 
-  let { isUp, isDown, hadBadPostureDuringRep, repCount } = prevState;
+  let { isUp, isDown, hadBadPostureDuringRep, repCount, totalRepsAttempted } = prevState;
   let lastRepCounted = false;
 
   // State machine: standing → squat → standing = 1 rep
   if (kneeAngle >= 160) {
     isUp = true;
     if (isDown) {
-      // Completed a full rep — only count if no posture errors during descent
+      totalRepsAttempted += 1;
       if (!hadBadPostureDuringRep) {
         repCount += 1;
         lastRepCounted = true;
@@ -143,6 +145,7 @@ export function analyzeSquatFrame(rawKeypoints: Kp[], prevState: SquatState): Sq
 
   return {
     repCount,
+    totalRepsAttempted,
     isUp,
     isDown,
     hadBadPostureDuringRep,
