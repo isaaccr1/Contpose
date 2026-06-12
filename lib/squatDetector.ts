@@ -79,7 +79,7 @@ export function analyzeSquatFrame(rawKeypoints: Kp[], prevState: SquatState): Sq
   const { side, label: activeSide } = pickSide(rawKeypoints);
   const vis = avgScore(rawKeypoints, [side.shoulder, side.hip, side.knee, side.ankle]);
 
-  if (vis < 0.3) {
+  if (vis < 0.5) {
     return { ...prevState, lowVisibility: true, issues: [], badPosture: false, activeSide: null, lastRepCounted: false };
   }
 

@@ -75,7 +75,7 @@ export default function PoseOverlay({ keypoints, containerWidth, containerHeight
   const connections = SIDE_CONNECTIONS[activeSide];
   const pointIds    = SIDE_POINTS[activeSide];
 
-  const MIN_SCORE = 0.25;
+  const MIN_SCORE = 0.5;
 
   return (
     <View style={{ position: 'absolute', top: 0, left: 0, width: containerWidth, height: containerHeight }} pointerEvents="none">

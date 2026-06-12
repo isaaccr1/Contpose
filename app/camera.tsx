@@ -19,6 +19,8 @@ export default function CameraModule() {
   const [detectorReady, setDetectorReady] = useState(false);
   const [containerSize, setContainerSize] = useState<ContainerSize>({ width: 0, height: 0 });
   const [activeKeypoints, setActiveKeypoints] = useState<any[]>([]);
+  const isMountedRef   = useRef(true);
+  const isAnalyzingRef = useRef(false);
 
   // Per-exercise states
   const [squatState, setSquatState] = useState<SquatState>(createInitialSquatState());
@@ -30,6 +32,12 @@ export default function CameraModule() {
 
   const isSquat  = currentExercise === 'Sentadilla';
   const isCrunch = currentExercise === 'Abdominales';
+
+  // Track mount state to avoid setState after unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   // Keep refs in sync with state for closure-safe interval access
   useEffect(() => { squatStateRef.current  = squatState;  }, [squatState]);
@@ -58,9 +66,10 @@ export default function CameraModule() {
   }, []);
 
   const analyzeCurrentFrame = async () => {
-    if (!detectorReady || !cameraRef.current) return;
+    if (!isAnalyzingRef.current || !isMountedRef.current || !detectorReady || !cameraRef.current) return;
     try {
       const pose = await estimatePoseFromCameraAsync(cameraRef);
+      if (!isMountedRef.current || !isAnalyzingRef.current) return;
       if (!pose?.keypoints) return;
 
       setActiveKeypoints(pose.keypoints);
@@ -75,14 +84,15 @@ export default function CameraModule() {
         setCrunchState(next);
       }
     } catch (e) {
-      console.warn('Error analizando frame', e);
+      // Ignore — camera lifecycle errors are handled inside poseDetector
     }
   };
 
   useEffect(() => {
+    isAnalyzingRef.current = isAnalyzing;
     if (!isAnalyzing || !detectorReady) return;
     analyzeCurrentFrame();
-    const interval = setInterval(analyzeCurrentFrame, 500);
+    const interval = setInterval(analyzeCurrentFrame, 600);
     return () => clearInterval(interval);
   }, [isAnalyzing, detectorReady, currentExercise]);
 
@@ -103,6 +113,7 @@ export default function CameraModule() {
   };
 
   const stopAnalysis = () => {
+    isAnalyzingRef.current = false;
     setAnalyzing(false);
     setActiveKeypoints([]);
   };
