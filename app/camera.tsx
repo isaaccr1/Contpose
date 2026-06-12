@@ -1,213 +1,133 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraType, useCameraPermissions, Camera } from 'expo-camera';
-import { WebView } from 'react-native-webview';
+import { CameraView, Camera } from 'expo-camera';
 import { router } from 'expo-router';
-
 import usePostureStore from '@/stores/posture';
+import { getPoseTemplate, PoseTemplate } from '@/lib/poseTemplates';
+import { initPoseDetectorAsync, estimatePoseFromCameraAsync } from '@/lib/poseDetector';
+import { getPoseAlerts, normalizePoseResult } from '@/lib/poseUtils';
+import { analyzeSquatFrame, createInitialSquatState, SquatState } from '@/lib/squatDetector';
+import SquatFeedback from '@/components/SquatFeedback';
 
 export default function CameraModule() {
-  const [facing, setFacing] = useState<CameraType>('back');
-  const [permission, requestPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<'back' | 'front'>('back');
+  const cameraRef = useRef<any>(null);
+  const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+  const [template, setTemplate] = useState<PoseTemplate | null>(null);
+  const [detectorReady, setDetectorReady] = useState(false);
+  const [squatState, setSquatState] = useState<SquatState>(createInitialSquatState());
+  const squatStateRef = useRef<SquatState>(createInitialSquatState());
 
-  const {
-    isAnalyzing,
-    currentExercise,
-    latestAlert,
-    setAnalyzing,
-    setExercise,
-    pushAlert,
-    clearAlert,
-  } = usePostureStore();
+  const { isAnalyzing, currentExercise, latestAlert, setAnalyzing, setExercise, pushAlert, clearAlert } =
+    usePostureStore();
 
-  const postureStatus = useMemo(() => {
-    if (!isAnalyzing) {
-      return 'Analisis detenido';
-    }
+  const isSquatMode = currentExercise === 'Sentadilla' && isAnalyzing;
 
-    if (!latestAlert) {
-      return 'Postura estable';
-    }
-
-    return `Correccion: ${latestAlert.bodyPart}`;
-  }, [isAnalyzing, latestAlert]);
-
-  // MediaPipe pose state (skeleton): se inicializa cuando se activa el analisis.
-  const [mediapipeReady, setMediapipeReady] = useState(false);
-  const [poseError, setPoseError] = useState<string | null>(null);
-  const poseRef = useRef<any>(null);
-  const [webviewSupported, setWebviewSupported] = useState<boolean | null>(null);
-  const cameraRef = useRef<Camera | null>(null);
-  const webviewRef = useRef<any>(null);
-  const [webviewReady, setWebviewReady] = useState(false);
-  const captureIntervalRef = useRef<number | null>(null);
-  const resolvedCameraType = ((): any => {
+  const requestCameraPermission = async () => {
     try {
-      if (typeof CameraType !== 'undefined' && CameraType) {
-        return facing === 'back' ? CameraType.back : CameraType.front;
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setPermissionGranted(status === 'granted');
+    } catch {
+      setPermissionGranted(false);
+    }
+  };
+
+  useEffect(() => { requestCameraPermission(); }, []);
+
+  useEffect(() => {
+    setTemplate(getPoseTemplate(currentExercise));
+  }, [currentExercise]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await initPoseDetectorAsync();
+        setDetectorReady(true);
+      } catch (e) {
+        console.warn('Error inicializando detector de pose', e);
+      }
+    })();
+  }, []);
+
+  // Keep squatStateRef in sync so the interval closure always has fresh state
+  useEffect(() => {
+    squatStateRef.current = squatState;
+  }, [squatState]);
+
+  const analyzeCurrentFrame = async () => {
+    if (!detectorReady || !cameraRef.current) return;
+
+    try {
+      const pose = await estimatePoseFromCameraAsync(cameraRef);
+      if (!pose) return;
+
+      if (isSquatMode || currentExercise === 'Sentadilla') {
+        // Squat mode: use raw keypoints for rep counting + posture
+        const newState = analyzeSquatFrame(pose.keypoints ?? [], squatStateRef.current);
+        squatStateRef.current = newState;
+        setSquatState(newState);
+      } else {
+        // Generic mode: template-based alerts
+        if (!template) return;
+        const normalized = normalizePoseResult(pose);
+        const alerts = getPoseAlerts(normalized, template);
+        if (alerts.length > 0) pushAlert(alerts[0]);
+        else clearAlert();
       }
     } catch (e) {
-      // ignore
-    }
-    return facing === 'back' ? 'back' : 'front';
-  })();
-
-  const renderNativeCamera = () => {
-    try {
-      if (!Camera) throw new Error('Camera component missing');
-      // Try to return Camera element; if Camera is not a valid component this will throw
-      return (
-        <Camera
-          ref={cameraRef}
-          style={styles.webview}
-          type={resolvedCameraType}
-          ratio="16:9"
-        />
-      );
-    } catch (err) {
-      return (
-        <View style={[styles.webview, { justifyContent: 'center', alignItems: 'center' }]}>
-          <Text style={{ color: '#fff' }}>Cámara no disponible en este entorno</Text>
-        </View>
-      );
+      console.warn('Error analizando frame', e);
     }
   };
 
   useEffect(() => {
-    let mounted = true;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
-    const initPose = async () => {
-      try {
-        // Intento de import dinámico. En dispositivos móviles puede requerir otro enfoque.
-        const mp = await import('@mediapipe/pose');
-        if (!mounted) return;
-        poseRef.current = mp;
-        setMediapipeReady(true);
-      } catch (err: any) {
-        if (!mounted) return;
-        setPoseError('No se pudo cargar MediaPipe Pose. Comprueba dependencias.');
-      }
-    };
-
-    if (isAnalyzing && !poseRef.current) {
-      void initPose();
+    if (isAnalyzing && detectorReady) {
+      analyzeCurrentFrame();
+      // 500ms for squats (needs frequent sampling for rep counting)
+      const ms = currentExercise === 'Sentadilla' ? 500 : 1500;
+      interval = setInterval(analyzeCurrentFrame, ms);
     }
 
-    return () => {
-      mounted = false;
-    };
-  }, [isAnalyzing]);
+    return () => { if (interval) clearInterval(interval); };
+  }, [isAnalyzing, detectorReady, currentExercise]);
 
-  // Simple analysis of landmarks received from WebView (MediaPipe)
-  // Thresholds (ajustables)
-  const HEELS_ALIGN_THRESHOLD = 0.10; // tolerancia X entre caderas y talones
-  const SPINE_STRAIGHTNESS_THRESHOLD = 0.12; // diferencia Y mínima hombros-caderas para considerar postura erguida
-  const ABDOMINAL_DY_THRESHOLD = 0.20; // distancia Y mínima hombros-caderas para abdominales
-
-  const analyzeLandmarks = (landmarks: any[]) => {
-    if (!isAnalyzing || !landmarks || landmarks.length === 0) return;
-
-    // landmarks are normalized [0..1] with indices per MediaPipe pose
-    const leftHip = landmarks[23];
-    const rightHip = landmarks[24];
-    const leftKnee = landmarks[25];
-    const rightKnee = landmarks[26];
-    const leftAnkle = landmarks[27];
-    const rightAnkle = landmarks[28];
-    const leftShoulder = landmarks[11];
-    const rightShoulder = landmarks[12];
-
-    if (!leftHip || !leftAnkle || !rightHip || !rightAnkle) return;
-
-    const hipsX = ((leftHip.x ?? 0) + (rightHip.x ?? 0)) / 2;
-    const anklesX = ((leftAnkle.x ?? 0) + (rightAnkle.x ?? 0)) / 2;
-    const shouldersY = ((leftShoulder?.y ?? 0) + (rightShoulder?.y ?? 0)) / 2;
-    const hipsY = ((leftHip?.y ?? 0) + (rightHip?.y ?? 0)) / 2;
-
-    // Sentadilla: si los talones no están alineados verticalmente con las caderas
-    if (currentExercise === 'Sentadilla') {
-      const dx = Math.abs(hipsX - anklesX);
-      if (dx > HEELS_ALIGN_THRESHOLD) {
-        pushAlert({ bodyPart: 'Talones', message: 'Alinea tus talones con la cintura.', severity: 'medium' });
-        return;
-      }
-
-      // espalda muy inclinada: si la distancia vertical entre hombros y caderas es pequeña
-      if (Math.abs(shouldersY - hipsY) < SPINE_STRAIGHTNESS_THRESHOLD) {
-        pushAlert({ bodyPart: 'Espalda', message: 'Endereza tu espalda.', severity: 'high' });
-        return;
-      }
-
-      clearAlert();
+  const selectExercise = (exercise: string) => {
+    if (exercise === 'Sentadilla') {
+      setSquatState(createInitialSquatState());
+      squatStateRef.current = createInitialSquatState();
     }
-
-    // Abdominales: comprobar si hay contracción (approx: hombros se acercan a caderas en Y)
-    if (currentExercise === 'Abdominales') {
-      const dy = hipsY - shouldersY; // positive when shoulders above hips
-      if (dy < ABDOMINAL_DY_THRESHOLD) {
-        pushAlert({ bodyPart: 'Core', message: 'Activa tu core y mantén la espalda baja pegada.', severity: 'medium' });
-        return;
-      }
-
-      clearAlert();
-    }
+    setExercise(exercise);
+    setAnalyzing(true);
   };
 
-  // Capture loop: when WebView doesn't support getUserMedia, capture frames from native Camera and post them
-  useEffect(() => {
-    if (!isAnalyzing) {
-      if (captureIntervalRef.current) {
-        clearInterval(captureIntervalRef.current as any);
-        captureIntervalRef.current = null;
-      }
-      return;
-    }
+  const stopAnalysis = () => {
+    setAnalyzing(false);
+    clearAlert();
+    setSquatState(createInitialSquatState());
+    squatStateRef.current = createInitialSquatState();
+  };
 
-    // only start native capture -> webview frames if webview explicitly lacks support and webview is ready
-    if (webviewSupported === false && webviewReady && cameraRef.current && cameraRef.current.takePictureAsync) {
-      // capture every 400ms
-      const intervalId = setInterval(async () => {
-        try {
-          const photo: any = await cameraRef.current?.takePictureAsync({ base64: true, quality: 0.4, skipProcessing: true });
-          if (photo && photo.base64 && webviewRef.current && webviewRef.current.postMessage) {
-            const data = { imageBase64: `data:image/jpeg;base64,${photo.base64}` };
-            webviewRef.current.postMessage(JSON.stringify(data));
-          }
-        } catch (e) {
-          // ignore capture errors silently
-        }
-      }, 400);
-
-      captureIntervalRef.current = intervalId as unknown as number;
-      return () => {
-        if (captureIntervalRef.current) {
-          clearInterval(captureIntervalRef.current as any);
-          captureIntervalRef.current = null;
-        }
-      };
-    }
-  }, [isAnalyzing, webviewSupported, webviewReady]);
-
-  if (!permission) {
+  if (permissionGranted === null) {
     return (
       <SafeAreaView style={styles.centered}>
-        <Text style={styles.infoText}>Comprobando permisos de camara...</Text>
+        <Text style={styles.infoText}>Comprobando permisos de cámara...</Text>
       </SafeAreaView>
     );
   }
 
-  if (!permission.granted) {
+  if (!permissionGranted) {
     return (
       <SafeAreaView style={styles.centered}>
         <Ionicons name="videocam-off" size={48} color="#64748b" />
-        <Text style={styles.title}>Permiso de camara requerido</Text>
-        <Text style={styles.infoText}>Este modulo necesita la camara para analisis en vivo de postura.</Text>
-
-        <TouchableOpacity style={styles.primaryButton} onPress={requestPermission}>
+        <Text style={styles.title}>Permiso de cámara requerido</Text>
+        <Text style={styles.infoText}>
+          Este módulo necesita la cámara para análisis en vivo de postura.
+        </Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={requestCameraPermission}>
           <Text style={styles.primaryButtonText}>Conceder permiso</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.secondaryButton} onPress={() => router.back()}>
           <Text style={styles.secondaryButtonText}>Volver</Text>
         </TouchableOpacity>
@@ -222,390 +142,194 @@ export default function CameraModule() {
           <Ionicons name="chevron-back" size={22} color="#0f172a" />
           <Text style={styles.backText}>Inicio</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Modulo Camara</Text>
+        <Text style={styles.headerTitle}>
+          {isAnalyzing ? currentExercise : 'Módulo Cámara'}
+        </Text>
+        <View style={{ width: 60 }} />
       </View>
 
-      <View style={styles.cameraWrapper}>
-        {/* WebView that runs MediaPipe Pose in-page and posts landmarks to React Native */}
-        {webviewSupported === false ? (
-          renderNativeCamera()
+      <View style={styles.cameraContainer}>
+        <CameraView ref={cameraRef} style={styles.camera} facing={facing} />
+
+        {/* Squat overlay */}
+        {isSquatMode && <SquatFeedback state={squatState} />}
+
+        {/* Generic posture overlay (non-squat exercises) */}
+        {isAnalyzing && !isSquatMode && (
+          <View style={styles.overlay}>
+            <View style={styles.feedbackBox}>
+              <Text style={styles.exerciseLabel}>{currentExercise}</Text>
+              {latestAlert ? (
+                <>
+                  <Text
+                    style={[
+                      styles.alert,
+                      { color: latestAlert.severity === 'high' ? '#ef4444' : '#f97316' },
+                    ]}
+                  >
+                    {latestAlert.message}
+                  </Text>
+                  <Text style={styles.bodyPart}>{latestAlert.bodyPart}</Text>
+                </>
+              ) : (
+                <Text style={styles.goodPosture}>✓ Postura correcta</Text>
+              )}
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* Controls */}
+      <View style={styles.controls}>
+        {!isAnalyzing ? (
+          <>
+            <TouchableOpacity
+              style={[styles.button, styles.buttonSentadilla]}
+              onPress={() => selectExercise('Sentadilla')}
+            >
+              <Ionicons name="barbell" size={20} color="#fff" />
+              <Text style={styles.buttonText}>Sentadilla</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.buttonAbdominales]}
+              onPress={() => selectExercise('Abdominales')}
+            >
+              <Ionicons name="body" size={20} color="#fff" />
+              <Text style={styles.buttonText}>Abdominales</Text>
+            </TouchableOpacity>
+          </>
         ) : (
-        <WebView
-          originWhitelist={["*"]}
-          javaScriptEnabled
-          domStorageEnabled
-          mixedContentMode="always"
-          allowsInlineMediaPlayback={true}
-          mediaPlaybackRequiresUserAction={false}
-          startInLoadingState={true}
-          ref={webviewRef}
-          source={{ html: `
-            <!doctype html>
-            <html>
-            <head>
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <style>html,body{margin:0;padding:0;background:#000}video{width:100%;height:100%;object-fit:cover}</style>
-            </head>
-            <body>
-              <video id="video" autoplay playsinline></video>
-              <script>
-                // report whether getUserMedia is available in this WebView
-                (function(){
-                  try{
-                    const supported = !!(navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-                    window.ReactNativeWebView.postMessage(JSON.stringify({__webrtcSupport: supported}));
-                  }catch(e){
-                    window.ReactNativeWebView.postMessage(JSON.stringify({__webrtcSupport: false}));
-                  }
-                })();
-
-                // helper to convert dataURL to Blob
-                function dataURLtoBlob(dataurl) {
-                  var arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1], bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
-                  while(n--){ u8arr[n] = bstr.charCodeAt(n); }
-                  return new Blob([u8arr], {type:mime});
-                }
-
-                window.addEventListener('message', async (ev) => {
-                  try {
-                    const data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
-                    if (data && data.imageBase64) {
-                      const blob = dataURLtoBlob(data.imageBase64);
-                      const imgBitmap = await createImageBitmap(blob);
-                      if (window._pose && window._pose.send) {
-                        await window._pose.send({ image: imgBitmap });
-                      }
-                    }
-                  } catch (e) {
-                    window.ReactNativeWebView.postMessage(JSON.stringify({__error: String(e)}));
-                  }
-                });
-              </script>
-              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
-              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.min.js"></script>
-              <script>
-                const video = document.getElementById('video');
-                const FACING = '${facing === 'back' ? 'environment' : 'user'}';
-                async function init(){
-                  try{
-                    // try to start native camera in WebView (if available)
-                    if (navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: FACING }, audio: false });
-                      video.srcObject = stream;
-                    }
-
-                    const pose = new Pose.Pose({locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/' + file});
-                    pose.setOptions({modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false});
-                    pose.onResults((results) => {
-                      if (results && results.poseLandmarks){
-                        window.ReactNativeWebView.postMessage(JSON.stringify(results.poseLandmarks));
-                      }
-                    });
-
-                    window._pose = pose; // expose for postMessage-driven frames
-
-                    if (video && video.srcObject) {
-                      const camera = new CameraUtils.Camera(video, { onFrame: async () => { await pose.send({image: video}); }, width: 640, height: 480 });
-                      camera.start();
-                    }
-
-                    // signal ready
-                    window.ReactNativeWebView.postMessage(JSON.stringify({__poseReady: true}));
-                  } catch(e){
-                    window.ReactNativeWebView.postMessage(JSON.stringify({__error: String(e)}));
-                  }
-                }
-                init();
-              </script>
-            </body>
-            </html>
-          `}}
-          style={styles.webview}
-          onMessage={(e) => {
-            try {
-              const payload = JSON.parse(e.nativeEvent.data);
-              if (payload && typeof payload.__webrtcSupport !== 'undefined') {
-                setWebviewSupported(Boolean(payload.__webrtcSupport));
-                return;
-              }
-              if (payload && payload.__poseReady) {
-                setWebviewReady(true);
-                return;
-              }
-              if (payload && payload.__error) {
-                setPoseError(String(payload.__error));
-                return;
-              }
-              analyzeLandmarks(payload);
-            } catch (err) {
-              // ignore parse errors
-            }
-          }}
-        />
+          <TouchableOpacity style={[styles.button, styles.buttonStop]} onPress={stopAnalysis}>
+            <Ionicons name="stop-circle" size={20} color="#fff" />
+            <Text style={styles.buttonText}>Detener</Text>
+          </TouchableOpacity>
         )}
 
-          {poseError ? (
-            <View style={[styles.statusChip, {position: 'absolute', top: 80, left: 16, right: 16}] }>
-              <Text style={[styles.statusChipText]}>Error cámara: {poseError}</Text>
-            </View>
-          ) : null}
-
-        <View style={styles.overlayTop}>
-          <View style={styles.statusChip}>
-            <Text style={styles.statusChipText}>{postureStatus}</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.flipButton}
-            onPress={() => setFacing((prev) => (prev === 'back' ? 'front' : 'back'))}
-          >
-            <Ionicons name="camera-reverse" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.overlayBottom}>
-          <View style={styles.exerciseRow}>
-            {['Sentadilla', 'Abdominales'].map((exercise) => (
-              <TouchableOpacity
-                key={exercise}
-                style={[styles.exerciseChip, currentExercise === exercise && styles.exerciseChipActive]}
-                onPress={() => setExercise(exercise)}
-              >
-                <Text style={[styles.exerciseChipText, currentExercise === exercise && styles.exerciseChipTextActive]}>
-                  {exercise}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <View style={styles.controlsRow}>
-            <TouchableOpacity
-              style={[styles.controlButton, isAnalyzing ? styles.stopButton : styles.startButton]}
-              onPress={() => setAnalyzing(!isAnalyzing)}
-            >
-              <Text style={styles.controlButtonText}>{isAnalyzing ? 'Detener analisis' : 'Iniciar analisis'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.warnButton}
-              onPress={() =>
-                pushAlert({
-                  bodyPart: 'Rodillas',
-                  message: 'Alinea rodillas con talones.',
-                  severity: 'medium',
-                })
-              }
-            >
-              <Ionicons name="alert-circle" size={18} color="#fff" />
-              <Text style={styles.controlButtonText}>Simular alerta</Text>
-            </TouchableOpacity>
-          </View>
-
-          {latestAlert ? (
-            <View style={styles.alertCard}>
-              <Text style={styles.alertTitle}>Correccion detectada</Text>
-              <Text style={styles.alertText}>{latestAlert.bodyPart}: {latestAlert.message}</Text>
-              <TouchableOpacity onPress={clearAlert}>
-                <Text style={styles.clearAlertText}>Limpiar alerta</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-        </View>
+        <TouchableOpacity
+          style={[styles.button, styles.buttonSecondary]}
+          onPress={() => setFacing((f) => (f === 'back' ? 'front' : 'back'))}
+        >
+          <Ionicons name="camera-reverse" size={18} color="#0f172a" />
+        </TouchableOpacity>
       </View>
+
+      {isAnalyzing && (
+        <View style={styles.statusBar}>
+          <View style={styles.statusDot} />
+          <Text style={styles.statusText}>
+            {isSquatMode
+              ? `Analizando sentadillas — ${detectorReady ? 'detector activo' : 'iniciando...'}`
+              : 'Analizando postura en vivo'}
+          </Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#020617',
-  },
+  safeArea: { flex: 1, backgroundColor: '#fff' },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
-    gap: 12,
-    backgroundColor: '#f8fafc',
-  },
-  title: {
-    fontSize: 22,
-    color: '#0f172a',
-    fontFamily: 'RobotoBold',
-    textAlign: 'center',
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#475569',
-    textAlign: 'center',
-    lineHeight: 20,
-    fontFamily: 'Roboto',
-  },
-  primaryButton: {
-    marginTop: 8,
-    backgroundColor: '#1d4ed8',
-    borderRadius: 14,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontFamily: 'RobotoBold',
-  },
-  secondaryButton: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  secondaryButtonText: {
-    color: '#334155',
-    fontSize: 14,
-    fontFamily: 'RobotoBold',
+    backgroundColor: '#fff',
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
   },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  backText: {
-    color: '#0f172a',
-    fontFamily: 'RobotoBold',
-  },
-  headerTitle: {
-    color: '#0f172a',
-    fontSize: 16,
-    fontFamily: 'RobotoBold',
-  },
-  cameraWrapper: {
-    flex: 1,
-  },
-  camera: {
-    flex: 1,
-  },
-  overlayTop: {
+  backButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  backText: { fontSize: 14, fontWeight: '600', color: '#0f172a' },
+  headerTitle: { fontSize: 16, fontWeight: '600', color: '#0f172a' },
+  cameraContainer: { flex: 1, position: 'relative', overflow: 'hidden' },
+  camera: { flex: 1 },
+  overlay: {
     position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingTop: 20,
+  },
+  feedbackBox: {
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    borderRadius: 12,
+    padding: 16,
+    minWidth: 240,
     alignItems: 'center',
   },
-  statusChip: {
-    backgroundColor: 'rgba(2, 6, 23, 0.75)',
-    borderRadius: 999,
+  exerciseLabel: { color: '#60a5fa', fontSize: 13, fontWeight: '600', marginBottom: 8 },
+  alert: { fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 4 },
+  bodyPart: { color: '#cbd5e1', fontSize: 11, marginTop: 4 },
+  goodPosture: { color: '#4ade80', fontSize: 14, fontWeight: '600' },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 10,
+    backgroundColor: '#f8fafc',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
   },
-  statusChipText: {
-    color: '#e2e8f0',
-    fontFamily: 'RobotoBold',
-    fontSize: 12,
-  },
-  flipButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(2, 6, 23, 0.75)',
-    justifyContent: 'center',
+  button: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  overlayBottom: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 20,
-    gap: 10,
-  },
-  exerciseRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  exerciseChip: {
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  exerciseChipActive: {
-    backgroundColor: '#2563eb',
-  },
-  exerciseChipText: {
-    color: '#e2e8f0',
-    fontSize: 12,
-    fontFamily: 'Roboto',
-  },
-  exerciseChipTextActive: {
-    color: '#fff',
-    fontFamily: 'RobotoBold',
-  },
-  controlsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  controlButton: {
-    flex: 1,
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  startButton: {
-    backgroundColor: '#15803d',
-  },
-  stopButton: {
-    backgroundColor: '#b91c1c',
-  },
-  warnButton: {
-    flex: 1,
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#1d4ed8',
-  },
-  controlButtonText: {
-    color: '#fff',
-    fontFamily: 'RobotoBold',
-    fontSize: 13,
-  },
-  alertCard: {
-    backgroundColor: 'rgba(2, 6, 23, 0.82)',
-    borderRadius: 14,
-    padding: 12,
     gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    justifyContent: 'center',
   },
-  alertTitle: {
-    color: '#fde68a',
-    fontFamily: 'RobotoBold',
-    fontSize: 13,
+  buttonSentadilla: { backgroundColor: '#3b82f6', flex: 1 },
+  buttonAbdominales: { backgroundColor: '#8b5cf6', flex: 1 },
+  buttonStop: { backgroundColor: '#ef4444', flex: 1 },
+  buttonSecondary: { backgroundColor: '#e2e8f0', paddingHorizontal: 10 },
+  buttonText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+  statusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#f1f5f9',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
   },
-  alertText: {
-    color: '#f8fafc',
-    fontFamily: 'Roboto',
-    fontSize: 13,
-    lineHeight: 18,
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ef4444' },
+  statusText: { fontSize: 12, color: '#0f172a', fontWeight: '500' },
+  title: { fontSize: 18, fontWeight: '600', color: '#0f172a', marginTop: 16 },
+  infoText: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    marginTop: 8,
+    marginHorizontal: 16,
   },
-  clearAlertText: {
-    color: '#93c5fd',
-    fontFamily: 'RobotoBold',
-    fontSize: 12,
+  primaryButton: {
+    marginTop: 24,
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
   },
+  primaryButtonText: { color: '#fff', fontWeight: '600', fontSize: 14, textAlign: 'center' },
+  secondaryButton: {
+    marginTop: 12,
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  secondaryButtonText: { color: '#0f172a', fontWeight: '600', fontSize: 14, textAlign: 'center' },
 });

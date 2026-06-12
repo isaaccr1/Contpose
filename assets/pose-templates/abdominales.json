@@ -1,0 +1,26 @@
+{
+  "exercise": "Abdominales",
+  "description": "Plantilla de abdominales para detectar espalda estable, altura de cadera y cuello alineado.",
+  "keypoints": {
+    "nose": { "x": 0.50, "y": 0.20 },
+    "leftShoulder": { "x": 0.42, "y": 0.30 },
+    "rightShoulder": { "x": 0.58, "y": 0.30 },
+    "leftElbow": { "x": 0.39, "y": 0.45 },
+    "rightElbow": { "x": 0.61, "y": 0.45 },
+    "leftWrist": { "x": 0.35, "y": 0.62 },
+    "rightWrist": { "x": 0.65, "y": 0.62 },
+    "leftHip": { "x": 0.45, "y": 0.55 },
+    "rightHip": { "x": 0.55, "y": 0.55 },
+    "leftKnee": { "x": 0.43, "y": 0.78 },
+    "rightKnee": { "x": 0.57, "y": 0.78 },
+    "leftAnkle": { "x": 0.42, "y": 0.98 },
+    "rightAnkle": { "x": 0.58, "y": 0.98 }
+  },
+  "thresholds": {
+    "hipAngle": { "label": "ángulo de cadera", "min": 30, "max": 60 },
+    "torsoAngle": { "label": "ángulo de espalda", "min": 15, "max": 35 },
+    "neckAngle": { "label": "ángulo de cuello", "min": 0, "max": 20 },
+    "kneeAngle": { "label": "ángulo de rodilla", "min": 160, "max": 180 },
+    "kneeToFootAlignment": { "label": "alineación rodilla-pie", "min": 0, "max": 25 }
+  }
+}

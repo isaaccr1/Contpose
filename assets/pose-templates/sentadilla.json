@@ -1,0 +1,20 @@
+{
+  "exercise": "Sentadilla",
+  "description": "Plantilla de sentadilla para detectar rodillas alineadas con los pies, torso estable y cadera correctamente posicionada.",
+  "keypoints": {
+    "leftShoulder": { "x": 0.44, "y": 0.25 },
+    "rightShoulder": { "x": 0.56, "y": 0.25 },
+    "leftHip": { "x": 0.45, "y": 0.55 },
+    "rightHip": { "x": 0.55, "y": 0.55 },
+    "leftKnee": { "x": 0.43, "y": 0.78 },
+    "rightKnee": { "x": 0.57, "y": 0.78 },
+    "leftAnkle": { "x": 0.41, "y": 0.98 },
+    "rightAnkle": { "x": 0.59, "y": 0.98 }
+  },
+  "thresholds": {
+    "kneeAngle": { "label": "ángulo de rodilla", "min": 70, "max": 100 },
+    "hipAngle": { "label": "ángulo de cadera", "min": 50, "max": 80 },
+    "torsoAngle": { "label": "ángulo de torso", "min": 10, "max": 25 },
+    "kneeToFootAlignment": { "label": "alineación rodilla-pie", "min": 0, "max": 15 }
+  }
+}
