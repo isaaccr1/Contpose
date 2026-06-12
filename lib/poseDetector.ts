@@ -45,9 +45,19 @@ export async function estimatePoseFromCameraAsync(cameraRef: any): Promise<any |
     const imageTensor = decodeJpeg(new Uint8Array(arrayBuffer));
 
   try {
+    const shape = imageTensor.shape as number[];
+    const imgH = shape[0];
+    const imgW = shape[1];
     const poses = await detector.estimatePoses(imageTensor, { flipHorizontal: false });
-    console.log('[poseDetector] poses found=', poses?.length ?? 0);
-    return poses?.[0] ?? null;
+    const pose = poses?.[0];
+    if (!pose) return null;
+    // Normalize keypoints to [0,1] so overlay can map to any display size
+    const normalizedKeypoints = pose.keypoints.map((kp: any) => ({
+      ...kp,
+      x: kp.x / imgW,
+      y: kp.y / imgH,
+    }));
+    return { ...pose, keypoints: normalizedKeypoints };
   } finally {
     imageTensor.dispose();
   }

@@ -1,28 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
-import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { LayoutChangeEvent, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, Camera } from 'expo-camera';
 import { router } from 'expo-router';
 import usePostureStore from '@/stores/posture';
-import { getPoseTemplate, PoseTemplate } from '@/lib/poseTemplates';
 import { initPoseDetectorAsync, estimatePoseFromCameraAsync } from '@/lib/poseDetector';
-import { getPoseAlerts, normalizePoseResult } from '@/lib/poseUtils';
 import { analyzeSquatFrame, createInitialSquatState, SquatState } from '@/lib/squatDetector';
-import SquatFeedback from '@/components/SquatFeedback';
+import { analyzeCrunchFrame, createInitialCrunchState, CrunchState } from '@/lib/crunchDetector';
+import SquatFeedback, { ExerciseFeedbackState } from '@/components/SquatFeedback';
+import PoseOverlay from '@/components/PoseOverlay';
+
+type ContainerSize = { width: number; height: number };
 
 export default function CameraModule() {
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const cameraRef = useRef<any>(null);
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
-  const [template, setTemplate] = useState<PoseTemplate | null>(null);
   const [detectorReady, setDetectorReady] = useState(false);
+  const [containerSize, setContainerSize] = useState<ContainerSize>({ width: 0, height: 0 });
+  const [activeKeypoints, setActiveKeypoints] = useState<any[]>([]);
+
+  // Per-exercise states
   const [squatState, setSquatState] = useState<SquatState>(createInitialSquatState());
-  const squatStateRef = useRef<SquatState>(createInitialSquatState());
+  const [crunchState, setCrunchState] = useState<CrunchState>(createInitialCrunchState());
+  const squatStateRef  = useRef<SquatState>(createInitialSquatState());
+  const crunchStateRef = useRef<CrunchState>(createInitialCrunchState());
 
-  const { isAnalyzing, currentExercise, latestAlert, setAnalyzing, setExercise, pushAlert, clearAlert } =
-    usePostureStore();
+  const { isAnalyzing, currentExercise, setAnalyzing, setExercise } = usePostureStore();
 
-  const isSquatMode = currentExercise === 'Sentadilla' && isAnalyzing;
+  const isSquat  = currentExercise === 'Sentadilla';
+  const isCrunch = currentExercise === 'Abdominales';
+
+  // Keep refs in sync with state for closure-safe interval access
+  useEffect(() => { squatStateRef.current  = squatState;  }, [squatState]);
+  useEffect(() => { crunchStateRef.current = crunchState; }, [crunchState]);
 
   const requestCameraPermission = async () => {
     try {
@@ -36,10 +47,6 @@ export default function CameraModule() {
   useEffect(() => { requestCameraPermission(); }, []);
 
   useEffect(() => {
-    setTemplate(getPoseTemplate(currentExercise));
-  }, [currentExercise]);
-
-  useEffect(() => {
     (async () => {
       try {
         await initPoseDetectorAsync();
@@ -50,30 +57,22 @@ export default function CameraModule() {
     })();
   }, []);
 
-  // Keep squatStateRef in sync so the interval closure always has fresh state
-  useEffect(() => {
-    squatStateRef.current = squatState;
-  }, [squatState]);
-
   const analyzeCurrentFrame = async () => {
     if (!detectorReady || !cameraRef.current) return;
-
     try {
       const pose = await estimatePoseFromCameraAsync(cameraRef);
-      if (!pose) return;
+      if (!pose?.keypoints) return;
 
-      if (isSquatMode || currentExercise === 'Sentadilla') {
-        // Squat mode: use raw keypoints for rep counting + posture
-        const newState = analyzeSquatFrame(pose.keypoints ?? [], squatStateRef.current);
-        squatStateRef.current = newState;
-        setSquatState(newState);
-      } else {
-        // Generic mode: template-based alerts
-        if (!template) return;
-        const normalized = normalizePoseResult(pose);
-        const alerts = getPoseAlerts(normalized, template);
-        if (alerts.length > 0) pushAlert(alerts[0]);
-        else clearAlert();
+      setActiveKeypoints(pose.keypoints);
+
+      if (isSquat) {
+        const next = analyzeSquatFrame(pose.keypoints, squatStateRef.current);
+        squatStateRef.current = next;
+        setSquatState(next);
+      } else if (isCrunch) {
+        const next = analyzeCrunchFrame(pose.keypoints, crunchStateRef.current);
+        crunchStateRef.current = next;
+        setCrunchState(next);
       }
     } catch (e) {
       console.warn('Error analizando frame', e);
@@ -81,33 +80,74 @@ export default function CameraModule() {
   };
 
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
-
-    if (isAnalyzing && detectorReady) {
-      analyzeCurrentFrame();
-      // 500ms for squats (needs frequent sampling for rep counting)
-      const ms = currentExercise === 'Sentadilla' ? 500 : 1500;
-      interval = setInterval(analyzeCurrentFrame, ms);
-    }
-
-    return () => { if (interval) clearInterval(interval); };
+    if (!isAnalyzing || !detectorReady) return;
+    analyzeCurrentFrame();
+    const interval = setInterval(analyzeCurrentFrame, 500);
+    return () => clearInterval(interval);
   }, [isAnalyzing, detectorReady, currentExercise]);
 
   const selectExercise = (exercise: string) => {
+    // Reset the state of the selected exercise
     if (exercise === 'Sentadilla') {
-      setSquatState(createInitialSquatState());
-      squatStateRef.current = createInitialSquatState();
+      const s = createInitialSquatState();
+      setSquatState(s);
+      squatStateRef.current = s;
+    } else if (exercise === 'Abdominales') {
+      const s = createInitialCrunchState();
+      setCrunchState(s);
+      crunchStateRef.current = s;
     }
+    setActiveKeypoints([]);
     setExercise(exercise);
     setAnalyzing(true);
   };
 
   const stopAnalysis = () => {
     setAnalyzing(false);
-    clearAlert();
-    setSquatState(createInitialSquatState());
-    squatStateRef.current = createInitialSquatState();
+    setActiveKeypoints([]);
   };
+
+  const handleCameraLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setContainerSize({ width, height });
+  };
+
+  // Build a unified feedback state for the SquatFeedback component
+  const feedbackState: ExerciseFeedbackState | null = (() => {
+    if (isSquat) return {
+      repCount: squatState.repCount,
+      phase: squatState.phase,
+      issues: squatState.issues,
+      badPosture: squatState.badPosture,
+      lastRepCounted: squatState.lastRepCounted,
+      hadBadPostureDuringRep: squatState.hadBadPostureDuringRep,
+      lowVisibility: squatState.lowVisibility,
+      primaryAngle: squatState.kneeAngle,
+    };
+    if (isCrunch) return {
+      repCount: crunchState.repCount,
+      phase: crunchState.phase,
+      issues: crunchState.issues,
+      badPosture: crunchState.badPosture,
+      lastRepCounted: crunchState.lastRepCounted,
+      hadBadPostureDuringRep: crunchState.hadBadPostureDuringRep,
+      lowVisibility: crunchState.lowVisibility,
+      primaryAngle: crunchState.trunkAngle,
+    };
+    return null;
+  })();
+
+  const activeSide = isSquat
+    ? squatState.activeSide
+    : isCrunch
+    ? crunchState.activeSide
+    : null;
+
+  const badPosture = isSquat
+    ? squatState.badPosture
+    : isCrunch
+    ? crunchState.badPosture
+    : false;
 
   if (permissionGranted === null) {
     return (
@@ -148,38 +188,35 @@ export default function CameraModule() {
         <View style={{ width: 60 }} />
       </View>
 
-      <View style={styles.cameraContainer}>
+      <View style={styles.cameraContainer} onLayout={handleCameraLayout}>
         <CameraView ref={cameraRef} style={styles.camera} facing={facing} />
 
-        {/* Squat overlay */}
-        {isSquatMode && <SquatFeedback state={squatState} />}
+        {/* Skeleton + keypoint overlay — shown for both exercises */}
+        {isAnalyzing && activeKeypoints.length > 0 && (
+          <PoseOverlay
+            keypoints={activeKeypoints}
+            containerWidth={containerSize.width}
+            containerHeight={containerSize.height}
+            badPosture={badPosture}
+            activeSide={activeSide}
+          />
+        )}
 
-        {/* Generic posture overlay (non-squat exercises) */}
-        {isAnalyzing && !isSquatMode && (
-          <View style={styles.overlay}>
-            <View style={styles.feedbackBox}>
-              <Text style={styles.exerciseLabel}>{currentExercise}</Text>
-              {latestAlert ? (
-                <>
-                  <Text
-                    style={[
-                      styles.alert,
-                      { color: latestAlert.severity === 'high' ? '#ef4444' : '#f97316' },
-                    ]}
-                  >
-                    {latestAlert.message}
-                  </Text>
-                  <Text style={styles.bodyPart}>{latestAlert.bodyPart}</Text>
-                </>
-              ) : (
-                <Text style={styles.goodPosture}>✓ Postura correcta</Text>
-              )}
-            </View>
-          </View>
+        {/* Rep counter + posture feedback */}
+        {isAnalyzing && feedbackState && (
+          <SquatFeedback
+            state={feedbackState}
+            angleName={isSquat ? 'Rodilla' : 'Tronco'}
+            phaseLabels={
+              isSquat
+                ? { up: '▲ ARRIBA', down: '▼ ABAJO' }
+                : { up: '▲ SUBIENDO', down: '▼ BAJANDO' }
+            }
+          />
         )}
       </View>
 
-      {/* Controls */}
+      {/* Exercise buttons */}
       <View style={styles.controls}>
         {!isAnalyzing ? (
           <>
@@ -190,7 +227,6 @@ export default function CameraModule() {
               <Ionicons name="barbell" size={20} color="#fff" />
               <Text style={styles.buttonText}>Sentadilla</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.button, styles.buttonAbdominales]}
               onPress={() => selectExercise('Abdominales')}
@@ -205,7 +241,6 @@ export default function CameraModule() {
             <Text style={styles.buttonText}>Detener</Text>
           </TouchableOpacity>
         )}
-
         <TouchableOpacity
           style={[styles.button, styles.buttonSecondary]}
           onPress={() => setFacing((f) => (f === 'back' ? 'front' : 'back'))}
@@ -216,11 +251,11 @@ export default function CameraModule() {
 
       {isAnalyzing && (
         <View style={styles.statusBar}>
-          <View style={styles.statusDot} />
+          <View style={[styles.statusDot, !detectorReady && styles.statusDotWaiting]} />
           <Text style={styles.statusText}>
-            {isSquatMode
-              ? `Analizando sentadillas — ${detectorReady ? 'detector activo' : 'iniciando...'}`
-              : 'Analizando postura en vivo'}
+            {detectorReady
+              ? `Analizando ${currentExercise.toLowerCase()} en vivo`
+              : 'Iniciando detector de postura...'}
           </Text>
         </View>
       )}
@@ -230,106 +265,28 @@ export default function CameraModule() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#fff' },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    backgroundColor: '#fff',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24, backgroundColor: '#fff' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
   backButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   backText: { fontSize: 14, fontWeight: '600', color: '#0f172a' },
   headerTitle: { fontSize: 16, fontWeight: '600', color: '#0f172a' },
   cameraContainer: { flex: 1, position: 'relative', overflow: 'hidden' },
   camera: { flex: 1 },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    paddingTop: 20,
-  },
-  feedbackBox: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    borderRadius: 12,
-    padding: 16,
-    minWidth: 240,
-    alignItems: 'center',
-  },
-  exerciseLabel: { color: '#60a5fa', fontSize: 13, fontWeight: '600', marginBottom: 8 },
-  alert: { fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 4 },
-  bodyPart: { color: '#cbd5e1', fontSize: 11, marginTop: 4 },
-  goodPosture: { color: '#4ade80', fontSize: 14, fontWeight: '600' },
-  controls: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#f8fafc',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-  },
-  button: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 8,
-    justifyContent: 'center',
-  },
+  controls: { flexDirection: 'row', justifyContent: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#e2e8f0' },
+  button: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8, justifyContent: 'center' },
   buttonSentadilla: { backgroundColor: '#3b82f6', flex: 1 },
   buttonAbdominales: { backgroundColor: '#8b5cf6', flex: 1 },
   buttonStop: { backgroundColor: '#ef4444', flex: 1 },
   buttonSecondary: { backgroundColor: '#e2e8f0', paddingHorizontal: 10 },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 13 },
-  statusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#f1f5f9',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-  },
+  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#f1f5f9', borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ef4444' },
+  statusDotWaiting: { backgroundColor: '#f59e0b' },
   statusText: { fontSize: 12, color: '#0f172a', fontWeight: '500' },
   title: { fontSize: 18, fontWeight: '600', color: '#0f172a', marginTop: 16 },
-  infoText: {
-    fontSize: 14,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 8,
-    marginHorizontal: 16,
-  },
-  primaryButton: {
-    marginTop: 24,
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
+  infoText: { fontSize: 14, color: '#64748b', textAlign: 'center', marginTop: 8, marginHorizontal: 16 },
+  primaryButton: { marginTop: 24, backgroundColor: '#3b82f6', paddingHorizontal: 32, paddingVertical: 12, borderRadius: 8 },
   primaryButtonText: { color: '#fff', fontWeight: '600', fontSize: 14, textAlign: 'center' },
-  secondaryButton: {
-    marginTop: 12,
-    backgroundColor: '#e2e8f0',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
+  secondaryButton: { marginTop: 12, backgroundColor: '#e2e8f0', paddingHorizontal: 32, paddingVertical: 12, borderRadius: 8 },
   secondaryButtonText: { color: '#0f172a', fontWeight: '600', fontSize: 14, textAlign: 'center' },
 });
